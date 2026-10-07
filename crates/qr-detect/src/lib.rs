@@ -497,9 +497,18 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
     }
     let threshold = ((min as u16 + max as u16) / 2) as u8;
     let mut overflow = false;
-    let mut last_error = None;
+    let mut search = SearchContext {
+        matrix,
+        core_scratch,
+        output,
+        segments,
+        stats,
+        max_candidates: config.max_candidates,
+        max_retries: config.max_retries,
+        last_error: None,
+    };
     for pass in 0..4 {
-        stats.passes += 1;
+        search.stats.passes += 1;
         let bin = Binary {
             image,
             threshold,
@@ -507,142 +516,24 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
             local: pass >= 2,
             radius: config.local_radius,
         };
-        let (count, full) = scan(bin, finders, config.max_finders, config.row_step, stats);
+        let (count, full) = scan(
+            bin,
+            finders,
+            config.max_finders,
+            config.row_step,
+            search.stats,
+        );
         overflow |= full;
         for a in 0..count {
             for b in a + 1..count {
                 for c in b + 1..count {
-                    if stats.candidates >= config.max_candidates {
-                        return Err(Error::CandidateBudget);
-                    }
-                    stats.candidates += 1;
                     let set = [
                         read_finder(finders, a),
                         read_finder(finders, b),
                         read_finder(finders, c),
                     ];
-                    let Some((tl, tr, bl)) = orient(set) else {
-                        continue;
-                    };
-                    let ax = tr.p.sub(tl.p);
-                    let ay = bl.p.sub(tl.p);
-                    // Scan pitches are central chords along the image axes, not symbol axes.
-                    // Normalize each finder span by its horizontal/vertical chord first.
-                    // The dominant component corrects the chord length for symbol rotation.
-                    let module_span = |axis: Point, end: Finder| {
-                        let x = axis.x / ((tl.pitch_x + end.pitch_x) * 0.5);
-                        let y = axis.y / ((tl.pitch_y + end.pitch_y) * 0.5);
-                        (x * x + y * y) / x.abs().max(y.abs())
-                    };
-                    let modules = (module_span(ax, tr) + module_span(ay, bl)) * 0.5 + 7.0;
-                    let estimate = ((modules - 17.0) / 4.0 + 0.5) as i32;
-                    for delta in [0, -1, 1, -2, 2] {
-                        let version = estimate + delta;
-                        if !(1..=40).contains(&version) {
-                            continue;
-                        }
-                        let side = version as usize * 4 + 17;
-                        let u = tr.p.sub(tl.p).scale(1.0 / (side as f32 - 7.0));
-                        let v = bl.p.sub(tl.p).scale(1.0 / (side as f32 - 7.0));
-                        if !finder_pattern(bin, tl.p, u, v)
-                            || !finder_pattern(bin, tr.p, u, v)
-                            || !finder_pattern(bin, bl.p, u, v)
-                        {
-                            continue;
-                        }
-                        let anchor = side as f32 - 6.5;
-                        let predicted = tl.p.add(u.add(v).scale(anchor - 3.5));
-                        let aligned = if version > 1 {
-                            find_alignment(bin, predicted, u, v)
-                        } else {
-                            None
-                        };
-                        if let Some(p) = aligned {
-                            if let Some(h) = homography(
-                                [
-                                    Point { x: 3.5, y: 3.5 },
-                                    Point {
-                                        x: side as f32 - 3.5,
-                                        y: 3.5,
-                                    },
-                                    Point {
-                                        x: 3.5,
-                                        y: side as f32 - 3.5,
-                                    },
-                                    Point {
-                                        x: anchor,
-                                        y: anchor,
-                                    },
-                                ],
-                                [tl.p, tr.p, bl.p, p],
-                            ) {
-                                if let Some(found) = attempt(
-                                    bin,
-                                    h,
-                                    side,
-                                    matrix,
-                                    core_scratch,
-                                    output,
-                                    segments,
-                                    config.max_retries,
-                                    stats,
-                                    &mut last_error,
-                                )? {
-                                    return Ok(found);
-                                }
-                            }
-                        }
-                        // Affine first, then bounded projective fourth-point hypotheses, including V1.
-                        for (dx, dy) in [
-                            (0.0, 0.0),
-                            (-0.10, 0.0),
-                            (0.10, 0.0),
-                            (0.0, -0.10),
-                            (0.0, 0.10),
-                            (-0.10, -0.10),
-                            (0.10, 0.10),
-                            (-0.10, 0.10),
-                            (0.10, -0.10),
-                        ] {
-                            let fourth =
-                                tr.p.add(bl.p)
-                                    .sub(tl.p)
-                                    .add(tr.p.sub(tl.p).scale(dx))
-                                    .add(bl.p.sub(tl.p).scale(dy));
-                            if let Some(h) = homography(
-                                [
-                                    Point { x: 3.5, y: 3.5 },
-                                    Point {
-                                        x: side as f32 - 3.5,
-                                        y: 3.5,
-                                    },
-                                    Point {
-                                        x: 3.5,
-                                        y: side as f32 - 3.5,
-                                    },
-                                    Point {
-                                        x: side as f32 - 3.5,
-                                        y: side as f32 - 3.5,
-                                    },
-                                ],
-                                [tl.p, tr.p, bl.p, fourth],
-                            ) {
-                                if let Some(found) = attempt(
-                                    bin,
-                                    h,
-                                    side,
-                                    matrix,
-                                    core_scratch,
-                                    output,
-                                    segments,
-                                    config.max_retries,
-                                    stats,
-                                    &mut last_error,
-                                )? {
-                                    return Ok(found);
-                                }
-                            }
-                        }
+                    if let Some(found) = search.candidate(bin, set)? {
+                        return Ok(found);
                     }
                 }
             }
@@ -650,7 +541,7 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
     }
     if overflow {
         Err(Error::FinderCapacity)
-    } else if let Some(e) = last_error {
+    } else if let Some(e) = search.last_error {
         Err(Error::Decode(e))
     } else {
         Err(Error::NotFound)
@@ -776,69 +667,197 @@ fn homography(src: [Point; 4], dst: [Point; 4]) -> Option<Homography> {
     }
     Some(Homography(h))
 }
-#[allow(clippy::too_many_arguments)]
-fn attempt(
-    bin: Binary<'_>,
-    h: Homography,
-    side: usize,
-    matrix: &mut [u8],
-    scratch: &mut [u8],
-    output: &mut [u8],
-    segments: &mut [Segment],
+/// Buffers and budgets shared by all threshold passes and projection attempts.
+struct SearchContext<'a> {
+    matrix: &'a mut [u8],
+    core_scratch: &'a mut [u8],
+    output: &'a mut [u8],
+    segments: &'a mut [Segment],
+    stats: &'a mut Stats,
+    max_candidates: usize,
     max_retries: usize,
-    stats: &mut Stats,
-    last_error: &mut Option<qr_core::Error>,
-) -> Result<Option<Detection>, Error> {
-    if stats.retries >= max_retries {
-        return Err(Error::RetryBudget);
-    }
-    stats.retries += 1;
-    matrix[..(side * side).div_ceil(8)].fill(0);
-    for y in 0..side {
-        for x in 0..side {
-            let Some(d) = bin.point(h.at(Point {
-                x: x as f32 + 0.5,
-                y: y as f32 + 0.5,
-            })) else {
-                return Ok(None);
-            };
-            if d {
-                let i = y * side + x;
-                matrix[i / 8] |= 128 >> (i % 8);
+    last_error: Option<qr_core::Error>,
+}
+impl SearchContext<'_> {
+    fn candidate(&mut self, bin: Binary<'_>, set: [Finder; 3]) -> Result<Option<Detection>, Error> {
+        if self.stats.candidates >= self.max_candidates {
+            return Err(Error::CandidateBudget);
+        }
+        self.stats.candidates += 1;
+        let Some((tl, tr, bl)) = orient(set) else {
+            return Ok(None);
+        };
+        let ax = tr.p.sub(tl.p);
+        let ay = bl.p.sub(tl.p);
+        // Scan pitches are central chords along the image axes, not symbol axes.
+        // Normalize each finder span by its horizontal/vertical chord first.
+        // The dominant component corrects the chord length for symbol rotation.
+        let module_span = |axis: Point, end: Finder| {
+            let x = axis.x / ((tl.pitch_x + end.pitch_x) * 0.5);
+            let y = axis.y / ((tl.pitch_y + end.pitch_y) * 0.5);
+            (x * x + y * y) / x.abs().max(y.abs())
+        };
+        let modules = (module_span(ax, tr) + module_span(ay, bl)) * 0.5 + 7.0;
+        let estimate = ((modules - 17.0) / 4.0 + 0.5) as i32;
+        for delta in [0, -1, 1, -2, 2] {
+            let version = estimate + delta;
+            if !(1..=40).contains(&version) {
+                continue;
+            }
+            if let Some(found) = self.version(bin, [tl, tr, bl], version as u8)? {
+                return Ok(Some(found));
             }
         }
+        Ok(None)
     }
-    let m = Matrix::new(matrix, side).map_err(Error::Decode)?;
-    match qr_core::decode(m, scratch, output, segments) {
-        Ok(decoded) => Ok(Some(Detection {
-            decoded,
-            corners: [
-                h.at(Point { x: 0.0, y: 0.0 }),
-                h.at(Point {
-                    x: side as f32,
-                    y: 0.0,
-                }),
-                h.at(Point {
-                    x: side as f32,
-                    y: side as f32,
-                }),
-                h.at(Point {
-                    x: 0.0,
-                    y: side as f32,
-                }),
-            ],
-            inverted: bin.inverted,
-            local_threshold: bin.local,
-            stats: *stats,
-        })),
-        Err(
-            e @ (qr_core::Error::OutputTooSmall
-            | qr_core::Error::SegmentsTooSmall
-            | qr_core::Error::ScratchTooSmall),
-        ) => Err(Error::Decode(e)),
-        Err(e) => {
-            *last_error = Some(e);
-            Ok(None)
+
+    fn version(
+        &mut self,
+        bin: Binary<'_>,
+        finders: [Finder; 3],
+        version: u8,
+    ) -> Result<Option<Detection>, Error> {
+        let [tl, tr, bl] = finders;
+        let side = version as usize * 4 + 17;
+        let u = tr.p.sub(tl.p).scale(1.0 / (side as f32 - 7.0));
+        let v = bl.p.sub(tl.p).scale(1.0 / (side as f32 - 7.0));
+        if !finder_pattern(bin, tl.p, u, v)
+            || !finder_pattern(bin, tr.p, u, v)
+            || !finder_pattern(bin, bl.p, u, v)
+        {
+            return Ok(None);
+        }
+        let anchor = side as f32 - 6.5;
+        let predicted = tl.p.add(u.add(v).scale(anchor - 3.5));
+        let aligned = if version > 1 {
+            find_alignment(bin, predicted, u, v)
+        } else {
+            None
+        };
+        if let Some(p) = aligned {
+            if let Some(h) = homography(
+                [
+                    Point { x: 3.5, y: 3.5 },
+                    Point {
+                        x: side as f32 - 3.5,
+                        y: 3.5,
+                    },
+                    Point {
+                        x: 3.5,
+                        y: side as f32 - 3.5,
+                    },
+                    Point {
+                        x: anchor,
+                        y: anchor,
+                    },
+                ],
+                [tl.p, tr.p, bl.p, p],
+            ) {
+                if let Some(found) = self.attempt(bin, h, side)? {
+                    return Ok(Some(found));
+                }
+            }
+        }
+        // Affine first, then bounded projective fourth-point hypotheses, including V1.
+        for (dx, dy) in [
+            (0.0, 0.0),
+            (-0.10, 0.0),
+            (0.10, 0.0),
+            (0.0, -0.10),
+            (0.0, 0.10),
+            (-0.10, -0.10),
+            (0.10, 0.10),
+            (-0.10, 0.10),
+            (0.10, -0.10),
+        ] {
+            let fourth =
+                tr.p.add(bl.p)
+                    .sub(tl.p)
+                    .add(tr.p.sub(tl.p).scale(dx))
+                    .add(bl.p.sub(tl.p).scale(dy));
+            if let Some(h) = homography(
+                [
+                    Point { x: 3.5, y: 3.5 },
+                    Point {
+                        x: side as f32 - 3.5,
+                        y: 3.5,
+                    },
+                    Point {
+                        x: 3.5,
+                        y: side as f32 - 3.5,
+                    },
+                    Point {
+                        x: side as f32 - 3.5,
+                        y: side as f32 - 3.5,
+                    },
+                ],
+                [tl.p, tr.p, bl.p, fourth],
+            ) {
+                if let Some(found) = self.attempt(bin, h, side)? {
+                    return Ok(Some(found));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn attempt(
+        &mut self,
+        bin: Binary<'_>,
+        h: Homography,
+        side: usize,
+    ) -> Result<Option<Detection>, Error> {
+        if self.stats.retries >= self.max_retries {
+            return Err(Error::RetryBudget);
+        }
+        self.stats.retries += 1;
+        self.matrix[..(side * side).div_ceil(8)].fill(0);
+        for y in 0..side {
+            for x in 0..side {
+                let Some(d) = bin.point(h.at(Point {
+                    x: x as f32 + 0.5,
+                    y: y as f32 + 0.5,
+                })) else {
+                    return Ok(None);
+                };
+                if d {
+                    let i = y * side + x;
+                    self.matrix[i / 8] |= 128 >> (i % 8);
+                }
+            }
+        }
+        let m = Matrix::new(self.matrix, side).map_err(Error::Decode)?;
+        match qr_core::decode(m, self.core_scratch, self.output, self.segments) {
+            Ok(decoded) => Ok(Some(Detection {
+                decoded,
+                corners: [
+                    h.at(Point { x: 0.0, y: 0.0 }),
+                    h.at(Point {
+                        x: side as f32,
+                        y: 0.0,
+                    }),
+                    h.at(Point {
+                        x: side as f32,
+                        y: side as f32,
+                    }),
+                    h.at(Point {
+                        x: 0.0,
+                        y: side as f32,
+                    }),
+                ],
+                inverted: bin.inverted,
+                local_threshold: bin.local,
+                stats: *self.stats,
+            })),
+            Err(
+                e @ (qr_core::Error::OutputTooSmall
+                | qr_core::Error::SegmentsTooSmall
+                | qr_core::Error::ScratchTooSmall),
+            ) => Err(Error::Decode(e)),
+            Err(e) => {
+                self.last_error = Some(e);
+                Ok(None)
+            }
         }
     }
 }
@@ -890,4 +909,44 @@ fn observation_pattern(bin: Binary<'_>, f: Finder) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_geometric_sample_consumes_retry_and_preserves_decode_error() {
+        let image = GrayImage::new(&[255; 21 * 21], 21, 21, 21).unwrap();
+        let bin = Binary {
+            image,
+            threshold: 127,
+            inverted: false,
+            local: false,
+            radius: 24,
+        };
+        let mut matrix = [0; MAX_MATRIX_BYTES];
+        let mut core_scratch = [0; qr_core::SCRATCH_BYTES];
+        let mut stats = Stats {
+            retries: 1,
+            ..Stats::default()
+        };
+        let mut search = SearchContext {
+            matrix: &mut matrix,
+            core_scratch: &mut core_scratch,
+            output: &mut [],
+            segments: &mut [],
+            stats: &mut stats,
+            max_candidates: 1,
+            max_retries: 2,
+            last_error: Some(qr_core::Error::Version),
+        };
+        // The first sampled point lies outside the image.
+        let outside = Homography([1.0, 0.0, -10.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(search.attempt(bin, outside, 21), Ok(None));
+        assert_eq!(search.stats.retries, 2);
+        assert_eq!(search.last_error, Some(qr_core::Error::Version));
+        assert_eq!(search.attempt(bin, outside, 21), Err(Error::RetryBudget));
+        assert_eq!(search.stats.retries, 2);
+    }
 }

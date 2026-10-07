@@ -190,6 +190,28 @@ fn arbitrary_rotation_perspective_and_lighting() {
         eprintln!("{name}: {:?}, local {}", r.stats, r.local_threshold);
         if name == "lighting" {
             assert!(r.local_threshold);
+            assert_eq!(
+                r.stats,
+                Stats {
+                    rows: 1080,
+                    finder_observations: 170,
+                    candidates: 1,
+                    retries: 1,
+                    passes: 3,
+                }
+            );
+        }
+        if name == "perspective-strong-v1" {
+            assert_eq!(
+                r.stats,
+                Stats {
+                    rows: 360,
+                    finder_observations: 108,
+                    candidates: 1,
+                    retries: 3,
+                    passes: 1,
+                }
+            );
         }
     }
 }
@@ -263,4 +285,179 @@ fn anisotropic_module_pitch() {
             .unwrap_or_else(|e| panic!("{sx}x{sy}: {e:?}"));
         assert_eq!(found.decoded.version, 7);
     }
+}
+
+fn undecodable_frame() -> Vec<u8> {
+    let bits = include_bytes!("../../../fixtures/v7.bin");
+    let matrix = qr_core::Matrix::new(bits, 45).unwrap();
+    let mut pixels = vec![255; 640 * 640];
+    let mut rng = 0x12345678u32;
+    for y in 0..45 {
+        for x in 0..45 {
+            let mut dark = matrix.get(x, y) == Some(true);
+            if !qr_core::is_function(7, x, y) {
+                rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+                dark = rng & 0x8000_0000 != 0;
+            }
+            if dark {
+                for j in 0..8 {
+                    for i in 0..8 {
+                        pixels[(140 + y * 8 + j) * 640 + 140 + x * 8 + i] = 0;
+                    }
+                }
+            }
+        }
+    }
+    pixels
+}
+
+fn decode_stats(
+    pixels: &[u8],
+    config: &DefaultConfig,
+    output: &mut [u8],
+    segments: &mut [Segment],
+) -> (Result<Detection, Error>, Stats) {
+    let mut scratch = vec![0; config.scratch_bytes().unwrap()];
+    let mut core_scratch = vec![0; SCRATCH_BYTES];
+    // Every call must reset the counters, even when it stops before scanning.
+    let mut stats = Stats {
+        rows: 9,
+        finder_observations: 9,
+        candidates: 9,
+        retries: 9,
+        passes: 9,
+    };
+    let result = decode_with_stats(
+        GrayImage::new(pixels, 640, 640, 640).unwrap(),
+        config,
+        &mut scratch,
+        &mut core_scratch,
+        output,
+        segments,
+        &mut stats,
+    );
+    if let Ok(found) = result {
+        assert_eq!(found.stats, stats);
+    }
+    (result, stats)
+}
+
+#[test]
+fn shared_pass_budgets_and_final_error_priority_keep_stats() {
+    let pixels = undecodable_frame();
+    let mut output = [0; 32];
+    let mut segments = [Segment::EMPTY; 8];
+    for (max_candidates, max_retries, error, candidates, passes) in [
+        (4096, 256, Error::Decode(qr_core::Error::Version), 2, 4),
+        (1, 256, Error::CandidateBudget, 1, 3),
+        (4096, 30, Error::RetryBudget, 2, 3),
+    ] {
+        let config = DefaultConfig {
+            max_candidates,
+            max_retries,
+            ..Default::default()
+        };
+        let (result, stats) = decode_stats(&pixels, &config, &mut output, &mut segments);
+        assert_eq!(result, Err(error));
+        assert_eq!(
+            stats,
+            Stats {
+                rows: 640 * passes,
+                finder_observations: if passes == 4 { 304 } else { 264 },
+                candidates,
+                retries: if passes == 4 { 60 } else { 30 },
+                passes,
+            }
+        );
+    }
+    // This extra finder is scanned after the symbol's three finders. Overflow
+    // must take precedence even when the retained triple produces decode errors.
+    let mut pixels = pixels;
+    for y in 0..7 {
+        for x in 0..7 {
+            let edge = x.min(6 - x).min(y.min(6 - y));
+            if edge != 1 {
+                for j in 0..8 {
+                    for i in 0..8 {
+                        pixels[(560 + y * 8 + j) * 640 + 40 + x * 8 + i] = 0;
+                    }
+                }
+            }
+        }
+    }
+    let config = DefaultConfig {
+        max_finders: 3,
+        ..Default::default()
+    };
+    let (result, stats) = decode_stats(&pixels, &config, &mut output, &mut segments);
+    assert_eq!(result, Err(Error::FinderCapacity));
+    assert_eq!(
+        stats,
+        Stats {
+            rows: 2560,
+            finder_observations: 352,
+            candidates: 2,
+            retries: 60,
+            passes: 4
+        }
+    );
+    let (result, stats) = decode_stats(
+        &vec![255; 640 * 640],
+        &DefaultConfig::default(),
+        &mut output,
+        &mut segments,
+    );
+    assert_eq!(result, Err(Error::NotFound));
+    assert_eq!(stats, Stats::default());
+}
+
+#[test]
+fn capacity_errors_stop_on_first_decoded_matrix() {
+    let (symbol, width) = image(7, 8);
+    let mut pixels = vec![255; 640 * 640];
+    for y in 0..width {
+        pixels[(108 + y) * 640 + 108..(108 + y) * 640 + 108 + width]
+            .copy_from_slice(&symbol[y * width..(y + 1) * width]);
+    }
+    let mut output = [0; 32];
+    let mut segments = [Segment::EMPTY; 8];
+    for (out_capacity, segment_capacity, error) in [
+        (0, 8, qr_core::Error::OutputTooSmall),
+        (32, 0, qr_core::Error::SegmentsTooSmall),
+    ] {
+        let (result, stats) = decode_stats(
+            &pixels,
+            &DefaultConfig::default(),
+            &mut output[..out_capacity],
+            &mut segments[..segment_capacity],
+        );
+        assert_eq!(result, Err(Error::Decode(error)));
+        assert_eq!(
+            stats,
+            Stats {
+                rows: 640,
+                finder_observations: 128,
+                candidates: 1,
+                retries: 1,
+                passes: 1
+            }
+        );
+    }
+    let (result, stats) = decode_stats(
+        &pixels,
+        &DefaultConfig::default(),
+        &mut output,
+        &mut segments,
+    );
+    assert!(result.is_ok());
+    assert_eq!(
+        stats,
+        Stats {
+            rows: 640,
+            finder_observations: 128,
+            candidates: 1,
+            retries: 1,
+            passes: 1
+        }
+    );
 }

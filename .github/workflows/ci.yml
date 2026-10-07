@@ -1,5 +1,7 @@
 name: Rust and C verification
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   host:
     strategy:
@@ -7,8 +9,8 @@ jobs:
         rust: [1.85.1, stable]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
@@ -29,9 +31,10 @@ jobs:
   embedded:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master (formerly stable)
         with:
+          toolchain: stable
           targets: thumbv6m-none-eabi, thumbv7em-none-eabi, wasm32-unknown-unknown
       - run: cargo build -p qr-core --target thumbv6m-none-eabi --release --locked
       - run: cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release --locked
@@ -40,8 +43,10 @@ jobs:
   fuzz:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master (formerly nightly)
+        with:
+          toolchain: nightly
       - run: cargo install cargo-fuzz --locked
       - run: python3 tools/fuzz_seeds.py
       - run: cargo fuzz run payload -- -max_total_time=15

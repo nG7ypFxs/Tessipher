@@ -1,6 +1,7 @@
 macro_rules! abi_schema { () => {
 abi_struct! {
-    /// Runtime detector budgets; obtain defaults with qr_default_config.
+    /// ABI-1 runtime detector budgets (five u32 fields); obtain defaults with qr_default_config.
+    /// Pixel reads use a finite default or qr_decode_gray_with_budget scalar argument.
     QrConfig => "qr_config" {
     /// Finder-record capacity per pass (3..=128); default 32.
     max_finders: u32,

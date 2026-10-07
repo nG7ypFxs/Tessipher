@@ -193,6 +193,7 @@ fn arbitrary_rotation_perspective_and_lighting() {
             assert_eq!(
                 r.stats,
                 Stats {
+                    pixel_reads: 7_964_308,
                     rows: 1080,
                     finder_observations: 170,
                     candidates: 1,
@@ -205,6 +206,7 @@ fn arbitrary_rotation_perspective_and_lighting() {
             assert_eq!(
                 r.stats,
                 Stats {
+                    pixel_reads: 298_439,
                     rows: 360,
                     finder_observations: 108,
                     candidates: 1,
@@ -321,6 +323,7 @@ fn decode_stats(
     let mut core_scratch = vec![0; SCRATCH_BYTES];
     // Every call must reset the counters, even when it stops before scanning.
     let mut stats = Stats {
+        pixel_reads: 9,
         rows: 9,
         finder_observations: 9,
         candidates: 9,
@@ -362,6 +365,7 @@ fn shared_pass_budgets_and_final_error_priority_keep_stats() {
         assert_eq!(
             stats,
             Stats {
+                pixel_reads: stats.pixel_reads,
                 rows: 640 * passes,
                 finder_observations: if passes == 4 { 304 } else { 264 },
                 candidates,
@@ -394,6 +398,7 @@ fn shared_pass_budgets_and_final_error_priority_keep_stats() {
     assert_eq!(
         stats,
         Stats {
+            pixel_reads: stats.pixel_reads,
             rows: 2560,
             finder_observations: 352,
             candidates: 2,
@@ -408,7 +413,13 @@ fn shared_pass_budgets_and_final_error_priority_keep_stats() {
         &mut segments,
     );
     assert_eq!(result, Err(Error::NotFound));
-    assert_eq!(stats, Stats::default());
+    assert_eq!(
+        stats,
+        Stats {
+            pixel_reads: 640 * 640,
+            ..Stats::default()
+        }
+    );
 }
 
 #[test]
@@ -435,6 +446,7 @@ fn capacity_errors_stop_on_first_decoded_matrix() {
         assert_eq!(
             stats,
             Stats {
+                pixel_reads: stats.pixel_reads,
                 rows: 640,
                 finder_observations: 128,
                 candidates: 1,
@@ -453,6 +465,7 @@ fn capacity_errors_stop_on_first_decoded_matrix() {
     assert_eq!(
         stats,
         Stats {
+            pixel_reads: stats.pixel_reads,
             rows: 640,
             finder_observations: 128,
             candidates: 1,
@@ -460,4 +473,234 @@ fn capacity_errors_stop_on_first_decoded_matrix() {
             passes: 1
         }
     );
+}
+
+#[test]
+fn pixel_budget_is_shared_across_minmax_all_passes_and_partial_local_reads() {
+    // High contrast without 1:1:3:1:1 runs: finder/candidate/retry limits cannot stop
+    // any pixel work here. Min/max costs 64; global passes 64 each; local 26*64 each.
+    let pixels: Vec<_> = (0..64).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();
+    let image = GrayImage::new(&pixels, 8, 8, 8).unwrap();
+    let total = 64 * (1 + 2 + 2 * 26);
+    for limit in [
+        1,
+        63,
+        64,
+        65,
+        127,
+        128,
+        191,
+        192,
+        193,
+        217,
+        218,
+        total - 1,
+        total,
+        total + 1,
+        usize::MAX,
+    ] {
+        let cfg = DefaultConfig {
+            max_finders: 3,
+            max_candidates: 1,
+            max_retries: 1,
+            max_pixel_reads: limit,
+            ..Default::default()
+        };
+        let mut ds = vec![0; cfg.scratch_bytes().unwrap()];
+        let mut cs = vec![0; SCRATCH_BYTES];
+        let mut stats = Stats {
+            pixel_reads: 9,
+            passes: 9,
+            ..Stats::default()
+        };
+        let result = decode_with_stats(image, &cfg, &mut ds, &mut cs, &mut [], &mut [], &mut stats);
+        assert_eq!(
+            result,
+            Err(if limit < total {
+                Error::PixelBudget
+            } else {
+                Error::NotFound
+            }),
+            "limit={limit}"
+        );
+        assert_eq!(stats.pixel_reads, limit.min(total), "limit={limit}");
+        assert_eq!(stats.candidates, 0);
+        assert_eq!(stats.retries, 0);
+        assert_eq!(stats.finder_observations, 0);
+        let passes = if limit < 64 {
+            0
+        } else if limit < 128 {
+            1
+        } else if limit < 192 {
+            2
+        } else if limit < 192 + 64 * 26 {
+            3
+        } else {
+            4
+        };
+        assert_eq!(stats.passes, passes, "limit={limit}");
+    }
+}
+
+#[test]
+fn successful_decode_at_exact_pixel_limit_and_one_read_short() {
+    let (pixels, width) = image(2, 4);
+    let baseline = run(&pixels, width, width, width, &DefaultConfig::default()).unwrap();
+    for (limit, succeeds) in [
+        (baseline.stats.pixel_reads - 1, false),
+        (baseline.stats.pixel_reads, true),
+        (baseline.stats.pixel_reads + 1, true),
+    ] {
+        let cfg = DefaultConfig {
+            max_pixel_reads: limit,
+            ..Default::default()
+        };
+        let mut ds = vec![0; cfg.scratch_bytes().unwrap()];
+        let mut cs = vec![0; SCRATCH_BYTES];
+        let mut stats = Stats::default();
+        let mut output = [0; 32];
+        let mut segments = [Segment::EMPTY; 8];
+        let result = decode_with_stats(
+            GrayImage::new(&pixels, width, width, width).unwrap(),
+            &cfg,
+            &mut ds,
+            &mut cs,
+            &mut output,
+            &mut segments,
+            &mut stats,
+        );
+        if succeeds {
+            let found = result.unwrap();
+            assert_eq!(&output[..found.decoded.payload_len], b"TEST");
+            assert_eq!(found.stats, baseline.stats);
+            assert_eq!(found.stats, stats);
+        } else {
+            assert_eq!(result, Err(Error::PixelBudget));
+            assert_eq!(stats.pixel_reads, limit);
+            assert_eq!(stats.retries, 1);
+        }
+    }
+}
+
+#[test]
+fn validation_precedes_pixel_reads_and_low_contrast_is_charged() {
+    let image = GrayImage::new(&[255; 64], 8, 8, 8).unwrap();
+    let cfg = DefaultConfig::default();
+    let mut ds = vec![0; cfg.scratch_bytes().unwrap()];
+    let mut cs = vec![0; SCRATCH_BYTES];
+    let mut stats = Stats::default();
+    let invalid = DefaultConfig {
+        max_pixel_reads: 0,
+        ..cfg
+    };
+    assert_eq!(
+        decode_with_stats(
+            image,
+            &invalid,
+            &mut ds,
+            &mut cs,
+            &mut [],
+            &mut [],
+            &mut stats
+        ),
+        Err(Error::InvalidConfig)
+    );
+    assert_eq!(stats, Stats::default());
+    assert_eq!(
+        decode_with_stats(image, &cfg, &mut [], &mut cs, &mut [], &mut [], &mut stats),
+        Err(Error::ScratchTooSmall)
+    );
+    assert_eq!(stats, Stats::default());
+    assert_eq!(
+        decode_with_stats(image, &cfg, &mut ds, &mut [], &mut [], &mut [], &mut stats),
+        Err(Error::Decode(qr_core::Error::ScratchTooSmall))
+    );
+    assert_eq!(stats, Stats::default());
+    assert_eq!(
+        decode_with_stats(
+            image,
+            &Config::<7, 8>::default(),
+            &mut ds,
+            &mut cs,
+            &mut [],
+            &mut [],
+            &mut stats
+        ),
+        Err(Error::ImageTooLarge)
+    );
+    assert_eq!(stats, Stats::default());
+    for limit in [63, 64, 65] {
+        let cfg = DefaultConfig {
+            max_pixel_reads: limit,
+            ..cfg
+        };
+        assert_eq!(
+            decode_with_stats(image, &cfg, &mut ds, &mut cs, &mut [], &mut [], &mut stats),
+            Err(if limit < 64 {
+                Error::PixelBudget
+            } else {
+                Error::NotFound
+            })
+        );
+        assert_eq!(
+            stats,
+            Stats {
+                pixel_reads: limit.min(64),
+                ..Stats::default()
+            }
+        );
+    }
+}
+
+#[test]
+fn large_finderless_image_cannot_bypass_pixel_work_with_tiny_candidate_budgets() {
+    let pixels: Vec<_> = (0..640 * 640)
+        .map(|i| if i % 2 == 0 { 0 } else { 255 })
+        .collect();
+    let config = DefaultConfig {
+        max_finders: 3,
+        max_candidates: 1,
+        max_retries: 1,
+        max_pixel_reads: 640 * 640 + 1024,
+        ..Default::default()
+    };
+    let (result, stats) = decode_stats(&pixels, &config, &mut [], &mut []);
+    assert_eq!(result, Err(Error::PixelBudget));
+    assert_eq!(stats.pixel_reads, config.max_pixel_reads);
+    assert_eq!(stats.passes, 1);
+    assert_eq!(stats.rows, 2);
+    assert_eq!(stats.candidates, 0);
+    assert_eq!(stats.retries, 0);
+}
+
+#[test]
+fn default_pixel_limit_stays_finite_with_large_compile_time_image_maxima() {
+    let width = 1100;
+    let pixels: Vec<_> = (0..width * width)
+        .map(|i| if i % 2 == 0 { 0 } else { 255 })
+        .collect();
+    let cfg = Config::<32768, 32768> {
+        max_finders: 3,
+        max_candidates: 1,
+        max_retries: 1,
+        ..Default::default()
+    };
+    assert_eq!(cfg.max_pixel_reads, DEFAULT_MAX_PIXEL_READS);
+    let mut ds = vec![0; cfg.scratch_bytes().unwrap()];
+    let mut cs = vec![0; SCRATCH_BYTES];
+    let mut stats = Stats::default();
+    let result = decode_with_stats(
+        GrayImage::new(&pixels, width, width, width).unwrap(),
+        &cfg,
+        &mut ds,
+        &mut cs,
+        &mut [],
+        &mut [],
+        &mut stats,
+    );
+    assert_eq!(result, Err(Error::PixelBudget));
+    assert_eq!(stats.pixel_reads, DEFAULT_MAX_PIXEL_READS);
+    assert_eq!(stats.passes, 4);
+    assert_eq!(stats.candidates, 0);
+    assert_eq!(stats.retries, 0);
 }

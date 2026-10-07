@@ -2,7 +2,7 @@
 //! Global midrange and local sampled-mean thresholds, each in normal/inverted polarity.
 //!
 //! [`GrayImage`] borrows a rectangular ROI, including a parent frame's row stride.
-//! [`Config`] sets independent image maxima and finder/candidate/sampling budgets.
+//! [`Config`] sets independent image maxima and finder/candidate/sampling and pixel-read budgets.
 //! [`decode`] returns the first decoded symbol. [`decode_with_stats`] also exposes
 //! counters after failure. No call enumerates every symbol in an image.
 //!
@@ -17,6 +17,7 @@
 //! ```
 #![no_std]
 #![forbid(unsafe_code)]
+use core::cell::Cell;
 use qr_core::{Decoded, Matrix, Segment, MAX_MATRIX_BYTES};
 
 /// Required detector scratch alignment, in bytes (1).
@@ -39,6 +40,8 @@ pub enum Error {
     CandidateBudget,
     /// The shared matrix-sampling budget was exhausted.
     RetryBudget,
+    /// The shared pixel-read budget was exhausted before another input read.
+    PixelBudget,
     /// No symbol decoded and no more specific failure was retained.
     NotFound,
     /// Core validation, capacity, or decoding failure.
@@ -102,6 +105,10 @@ impl<'a> GrayImage<'a> {
         self.data[y * self.stride + x]
     }
 }
+/// Default maximum actual input pixel reads across a complete decode call.
+/// Independent of image dimensions; includes min/max, repeated and local reads.
+pub const DEFAULT_MAX_PIXEL_READS: usize = 64_000_000;
+
 /// Image maxima are independent const parameters. Changing them does not change scratch size.
 ///
 /// Both maxima must be in 1..=32768. Defaults are 640 by 640 pixels, 32 finder
@@ -122,6 +129,11 @@ pub struct Config<const MAX_WIDTH: usize = 640, const MAX_HEIGHT: usize = 640> {
     pub row_step: usize,
     /// Half-width of the sampled local-threshold window in pixels (4..=128); default 24.
     pub local_radius: usize,
+    /// Actual input pixel reads across all passes (1..=usize::MAX); default
+    /// [`DEFAULT_MAX_PIXEL_READS`]. Includes initial min/max and repeated reads.
+    /// Each local threshold decision costs 26 reads, even at clamped edges.
+    /// This bounds pixel work, not total CPU cycles or caller buffer initialization.
+    pub max_pixel_reads: usize,
 }
 impl<const W: usize, const H: usize> Default for Config<W, H> {
     fn default() -> Self {
@@ -131,6 +143,7 @@ impl<const W: usize, const H: usize> Default for Config<W, H> {
             max_retries: 256,
             row_step: 1,
             local_radius: 24,
+            max_pixel_reads: DEFAULT_MAX_PIXEL_READS,
         }
     }
 }
@@ -155,6 +168,7 @@ impl<const W: usize, const H: usize> Config<W, H> {
             || !(3..=128).contains(&self.max_finders)
             || self.max_candidates == 0
             || self.max_candidates > 1_000_000
+            || self.max_pixel_reads == 0
             || self.max_retries == 0
             || self.max_retries > 65536
             || self.row_step == 0
@@ -209,10 +223,12 @@ impl Point {
 }
 /// Work counters accumulated across the complete decode call.
 ///
-/// Early validation failures and images with global contrast below 8 leave all
-/// counters at zero. Counters do not include the initial min/max pixel scan.
+/// Early validation failures leave all counters at zero. Pixel reads include
+/// the initial min/max scan, including on low-contrast images or budget failure.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
+    /// Actual input pixel reads, including repeats; never exceeds max_pixel_reads.
+    pub pixel_reads: usize,
     /// Rows visited by finder scanning, summed across passes.
     pub rows: usize,
     /// Run-ratio observations passing both cross-checks, before 7×7 pattern validation.
@@ -285,17 +301,40 @@ fn sqrt(x: f32) -> f32 {
     }
     y
 }
+/// One counter shared by min/max and every detector pass/helper.
+struct PixelBudget {
+    limit: usize,
+    used: Cell<usize>,
+}
+impl PixelBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            used: Cell::new(0),
+        }
+    }
+    fn read(&self, image: GrayImage<'_>, x: usize, y: usize) -> Result<u8, Error> {
+        let used = self.used.get();
+        if used >= self.limit {
+            return Err(Error::PixelBudget);
+        }
+        // Check before reading; used + 1 is safe even when limit == usize::MAX.
+        self.used.set(used + 1);
+        Ok(image.at(x, y))
+    }
+}
 #[derive(Clone, Copy)]
 struct Binary<'a> {
     image: GrayImage<'a>,
+    budget: &'a PixelBudget,
     threshold: u8,
     inverted: bool,
     local: bool,
     radius: usize,
 }
 impl Binary<'_> {
-    fn dark(self, x: usize, y: usize) -> bool {
-        let pixel = self.image.at(x, y) as u32;
+    fn dark(self, x: usize, y: usize) -> Result<bool, Error> {
+        let pixel = self.budget.read(self.image, x, y)? as u32;
         let dark = if !self.local {
             pixel <= self.threshold as u32
         } else {
@@ -311,7 +350,7 @@ impl Binary<'_> {
                     let py = (y as i32 + j * self.radius as i32 / 2)
                         .clamp(0, self.image.height as i32 - 1)
                         as usize;
-                    let v = self.image.at(px, py);
+                    let v = self.budget.read(self.image, px, py)?;
                     sum += v as u32;
                     min = min.min(v);
                     max = max.max(v);
@@ -323,9 +362,9 @@ impl Binary<'_> {
                 pixel * 25 < sum
             }
         };
-        dark ^ self.inverted
+        Ok(dark ^ self.inverted)
     }
-    fn point(self, p: Point) -> Option<bool> {
+    fn point(self, p: Point) -> Result<Option<bool>, Error> {
         if !p.x.is_finite()
             || !p.y.is_finite()
             || p.x < 0.0
@@ -333,9 +372,9 @@ impl Binary<'_> {
             || p.x >= self.image.width as f32
             || p.y >= self.image.height as f32
         {
-            None
+            Ok(None)
         } else {
-            Some(self.dark(p.x as usize, p.y as usize))
+            Ok(Some(self.dark(p.x as usize, p.y as usize)?))
         }
     }
 }
@@ -360,7 +399,7 @@ fn cross_check(
     y: usize,
     horizontal: bool,
     expected: f32,
-) -> Option<(f32, f32)> {
+) -> Result<Option<(f32, f32)>, Error> {
     let limit = if horizontal {
         bin.image.width
     } else {
@@ -374,43 +413,45 @@ fn cross_check(
             bin.dark(x, p)
         }
     };
-    if !get(center) {
-        return None;
+    if !get(center)? {
+        return Ok(None);
     }
     let mut r = [0usize; 5];
     let bound = (expected * 6.0 + 5.0) as usize;
     let mut low = center as isize;
-    while low >= 0 && get(low as usize) && r[2] <= bound {
+    while low >= 0 && get(low as usize)? && r[2] <= bound {
         r[2] += 1;
         low -= 1;
     }
-    while low >= 0 && !get(low as usize) && r[1] <= bound {
+    while low >= 0 && !get(low as usize)? && r[1] <= bound {
         r[1] += 1;
         low -= 1;
     }
-    while low >= 0 && get(low as usize) && r[0] <= bound {
+    while low >= 0 && get(low as usize)? && r[0] <= bound {
         r[0] += 1;
         low -= 1;
     }
     let mut high = center + 1;
-    while high < limit && get(high) && r[2] <= bound {
+    while high < limit && get(high)? && r[2] <= bound {
         r[2] += 1;
         high += 1;
     }
     let center_high = high;
-    while high < limit && !get(high) && r[3] <= bound {
+    while high < limit && !get(high)? && r[3] <= bound {
         r[3] += 1;
         high += 1;
     }
-    while high < limit && get(high) && r[4] <= bound {
+    while high < limit && get(high)? && r[4] <= bound {
         r[4] += 1;
         high += 1;
     }
-    let module = ratio(&r)?;
+    let Some(module) = ratio(&r) else {
+        return Ok(None);
+    };
     if module < expected * 0.4 || module > expected * 2.5 {
-        return None;
+        return Ok(None);
     }
-    Some((center_high as f32 - r[2] as f32 * 0.5, module))
+    Ok(Some((center_high as f32 - r[2] as f32 * 0.5, module)))
 }
 fn add_finder(storage: &mut [u8], count: &mut usize, cap: usize, f: Finder) -> bool {
     for i in 0..*count {
@@ -456,7 +497,7 @@ fn scan(
     cap: usize,
     step: usize,
     stats: &mut Stats,
-) -> (usize, bool) {
+) -> Result<(usize, bool), Error> {
     let mut count = 0;
     let mut overflow = false;
     for y in (0..bin.image.height).step_by(step) {
@@ -464,7 +505,7 @@ fn scan(
         let mut runs = [0usize; 5];
         let mut color = false;
         for x in 0..=bin.image.width {
-            let next = x < bin.image.width && bin.dark(x, y);
+            let next = x < bin.image.width && bin.dark(x, y)?;
             if next == color {
                 runs[4] += 1;
                 continue;
@@ -473,9 +514,9 @@ fn scan(
                 if let Some(module) = ratio(&runs) {
                     let cx = x as f32 - runs[4] as f32 - runs[3] as f32 - runs[2] as f32 * 0.5;
                     if cx >= 0.0 && cx < bin.image.width as f32 {
-                        if let Some((cy, my)) = cross_check(bin, cx as usize, y, false, module) {
+                        if let Some((cy, my)) = cross_check(bin, cx as usize, y, false, module)? {
                             if let Some((rx, mx)) =
-                                cross_check(bin, cx as usize, cy as usize, true, my)
+                                cross_check(bin, cx as usize, cy as usize, true, my)?
                             {
                                 stats.finder_observations += 1;
                                 let f = Finder {
@@ -484,7 +525,7 @@ fn scan(
                                     pitch_y: my,
                                     hits: 1,
                                 };
-                                if observation_pattern(bin, f)
+                                if observation_pattern(bin, f)?
                                     && !add_finder(storage, &mut count, cap, f)
                                 {
                                     overflow = true;
@@ -513,7 +554,7 @@ fn scan(
         }
         write_finder(storage, j, value);
     }
-    (count, overflow)
+    Ok((count, overflow))
 }
 /// Decodes at most one symbol, using deterministic threshold/polarity/triple/version priority.
 /// All budgets are shared across the complete call. Thresholds are tried in order:
@@ -560,6 +601,34 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
     stats: &mut Stats,
 ) -> Result<Detection, Error> {
     *stats = Stats::default();
+    let budget = PixelBudget::new(config.max_pixel_reads);
+    let result = decode_inner(
+        image,
+        config,
+        scratch,
+        core_scratch,
+        output,
+        segments,
+        stats,
+        &budget,
+    );
+    stats.pixel_reads = budget.used.get();
+    result.map(|mut found| {
+        found.stats = *stats;
+        found
+    })
+}
+#[allow(clippy::too_many_arguments)]
+fn decode_inner<const W: usize, const H: usize>(
+    image: GrayImage<'_>,
+    config: &Config<W, H>,
+    scratch: &mut [u8],
+    core_scratch: &mut [u8],
+    output: &mut [u8],
+    segments: &mut [Segment],
+    stats: &mut Stats,
+    budget: &PixelBudget,
+) -> Result<Detection, Error> {
     let needed = config.scratch_bytes()?;
     if image.width > W || image.height > H {
         return Err(Error::ImageTooLarge);
@@ -575,7 +644,7 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
     let mut max = 0u8;
     for y in 0..image.height {
         for x in 0..image.width {
-            let v = image.at(x, y);
+            let v = budget.read(image, x, y)?;
             min = min.min(v);
             max = max.max(v);
         }
@@ -599,6 +668,7 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
         search.stats.passes += 1;
         let bin = Binary {
             image,
+            budget,
             threshold,
             inverted: pass % 2 != 0,
             local: pass >= 2,
@@ -610,7 +680,7 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
             config.max_finders,
             config.row_step,
             search.stats,
-        );
+        )?;
         overflow |= full;
         for a in 0..count {
             for b in a + 1..count {
@@ -669,7 +739,12 @@ fn orient(f: [Finder; 3]) -> Option<(Finder, Finder, Finder)> {
     }
     Some((tl, tr, bl))
 }
-fn find_alignment(bin: Binary<'_>, prediction: Point, u: Point, v: Point) -> Option<Point> {
+fn find_alignment(
+    bin: Binary<'_>,
+    prediction: Point,
+    u: Point,
+    v: Point,
+) -> Result<Option<Point>, Error> {
     let mut best = None;
     let mut best_score = -1.0f32;
     // Search up to eight modules around the affine prediction, half-module increments.
@@ -684,7 +759,7 @@ fn find_alignment(bin: Binary<'_>, prediction: Point, u: Point, v: Point) -> Opt
                 for x in -2i32..=2 {
                     let p = center.add(u.scale(x as f32)).add(v.scale(y as f32));
                     let expected = x.abs() == 2 || y.abs() == 2 || (x == 0 && y == 0);
-                    if let Some(d) = bin.point(p) {
+                    if let Some(d) = bin.point(p)? {
                         matches += usize::from(d == expected);
                     } else {
                         valid = false;
@@ -700,7 +775,7 @@ fn find_alignment(bin: Binary<'_>, prediction: Point, u: Point, v: Point) -> Opt
             }
         }
     }
-    best
+    Ok(best)
 }
 #[derive(Clone, Copy)]
 struct Homography([f32; 8]);
@@ -809,16 +884,16 @@ impl SearchContext<'_> {
         let side = version as usize * 4 + 17;
         let u = tr.p.sub(tl.p).scale(1.0 / (side as f32 - 7.0));
         let v = bl.p.sub(tl.p).scale(1.0 / (side as f32 - 7.0));
-        if !finder_pattern(bin, tl.p, u, v)
-            || !finder_pattern(bin, tr.p, u, v)
-            || !finder_pattern(bin, bl.p, u, v)
+        if !finder_pattern(bin, tl.p, u, v)?
+            || !finder_pattern(bin, tr.p, u, v)?
+            || !finder_pattern(bin, bl.p, u, v)?
         {
             return Ok(None);
         }
         let anchor = side as f32 - 6.5;
         let predicted = tl.p.add(u.add(v).scale(anchor - 3.5));
         let aligned = if version > 1 {
-            find_alignment(bin, predicted, u, v)
+            find_alignment(bin, predicted, u, v)?
         } else {
             None
         };
@@ -905,7 +980,8 @@ impl SearchContext<'_> {
                 let Some(d) = bin.point(h.at(Point {
                     x: x as f32 + 0.5,
                     y: y as f32 + 0.5,
-                })) else {
+                }))?
+                else {
                     return Ok(None);
                 };
                 if d {
@@ -950,22 +1026,22 @@ impl SearchContext<'_> {
     }
 }
 
-fn finder_pattern(bin: Binary<'_>, center: Point, u: Point, v: Point) -> bool {
+fn finder_pattern(bin: Binary<'_>, center: Point, u: Point, v: Point) -> Result<bool, Error> {
     let mut good = 0;
     for y in -3i32..=3 {
         for x in -3i32..=3 {
             let edge = x.abs().max(y.abs());
             let expected = edge == 3 || edge <= 1;
             let p = center.add(u.scale(x as f32)).add(v.scale(y as f32));
-            if bin.point(p) == Some(expected) {
+            if bin.point(p)? == Some(expected) {
                 good += 1;
             }
         }
     }
-    good >= 41
+    Ok(good >= 41)
 }
 
-fn observation_pattern(bin: Binary<'_>, f: Finder) -> bool {
+fn observation_pattern(bin: Binary<'_>, f: Finder) -> Result<bool, Error> {
     for (cos, sin) in [
         (1.0f32, 0.0f32),
         (0.9238795, 0.38268343),
@@ -987,16 +1063,16 @@ fn observation_pattern(bin: Binary<'_>, f: Finder) -> bool {
                 let edge = x.abs().max(y.abs());
                 let expected = edge == 3 || edge <= 1;
                 let p = f.p.add(u.scale(x as f32)).add(v.scale(y as f32));
-                if bin.point(p) == Some(expected) {
+                if bin.point(p)? == Some(expected) {
                     good += 1;
                 }
             }
         }
         if good >= 37 {
-            return true;
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -1005,9 +1081,11 @@ mod tests {
 
     #[test]
     fn rejected_geometric_sample_consumes_retry_and_preserves_decode_error() {
+        let budget = PixelBudget::new(DEFAULT_MAX_PIXEL_READS);
         let image = GrayImage::new(&[255; 21 * 21], 21, 21, 21).unwrap();
         let bin = Binary {
             image,
+            budget: &budget,
             threshold: 127,
             inverted: false,
             local: false,
@@ -1036,5 +1114,161 @@ mod tests {
         assert_eq!(search.last_error, Some(qr_core::Error::Version));
         assert_eq!(search.attempt(bin, outside, 21), Err(Error::RetryBudget));
         assert_eq!(search.stats.retries, 2);
+    }
+    fn test_binary<'a>(image: GrayImage<'a>, budget: &'a PixelBudget, local: bool) -> Binary<'a> {
+        Binary {
+            image,
+            budget,
+            threshold: 127,
+            inverted: false,
+            local,
+            radius: 24,
+        }
+    }
+
+    #[test]
+    fn local_reads_are_charged_individually_including_clamped_duplicates() {
+        let image = GrayImage::new(&[0; 64], 8, 8, 8).unwrap();
+        for limit in [1, 2, 24, 25, 26, 27] {
+            let budget = PixelBudget::new(limit);
+            let bin = test_binary(image, &budget, true);
+            let expected = if limit < 26 {
+                Err(Error::PixelBudget)
+            } else {
+                Ok(true)
+            };
+            assert_eq!(bin.dark(0, 0), expected);
+            assert_eq!(budget.used.get(), limit.min(26));
+            // A fresh decision cannot use the unused part as a complete local read.
+            assert_eq!(bin.dark(0, 0), Err(Error::PixelBudget));
+            assert_eq!(budget.used.get(), limit);
+        }
+        let budget = PixelBudget::new(1);
+        assert_eq!(test_binary(image, &budget, false).dark(0, 0), Ok(true));
+        assert_eq!(
+            test_binary(image, &budget, false).dark(0, 0),
+            Err(Error::PixelBudget)
+        );
+        assert_eq!(budget.used.get(), 1);
+    }
+
+    #[test]
+    fn exhausted_budget_checks_before_access_and_never_overflows() {
+        let image = GrayImage::new(&[255], 1, 1, 1).unwrap();
+        let budget = PixelBudget::new(usize::MAX);
+        budget.used.set(usize::MAX - 1);
+        assert_eq!(budget.read(image, 0, 0), Ok(255));
+        // Out-of-bounds coordinates would panic if the pixel were accessed.
+        assert_eq!(
+            budget.read(image, usize::MAX, usize::MAX),
+            Err(Error::PixelBudget)
+        );
+        assert_eq!(budget.used.get(), usize::MAX);
+    }
+
+    #[test]
+    fn all_finder_and_alignment_helpers_propagate_exhaustion() {
+        let image = GrayImage::new(&[0; 64 * 64], 64, 64, 64).unwrap();
+        let center = Point { x: 32.0, y: 32.0 };
+        let u = Point { x: 1.0, y: 0.0 };
+        let v = Point { x: 0.0, y: 1.0 };
+        let f = Finder {
+            p: center,
+            pitch_x: 1.0,
+            pitch_y: 1.0,
+            hits: 1,
+        };
+        for local in [false, true] {
+            let budget = PixelBudget::new(1);
+            let bin = test_binary(image, &budget, local);
+            assert_eq!(
+                cross_check(bin, 32, 32, false, 1.0),
+                Err(Error::PixelBudget)
+            );
+            assert_eq!(budget.used.get(), 1);
+            let budget = PixelBudget::new(1);
+            let bin = test_binary(image, &budget, local);
+            assert_eq!(cross_check(bin, 32, 32, true, 1.0), Err(Error::PixelBudget));
+            let budget = PixelBudget::new(1);
+            let bin = test_binary(image, &budget, local);
+            assert_eq!(finder_pattern(bin, center, u, v), Err(Error::PixelBudget));
+            assert_eq!(budget.used.get(), 1);
+            let budget = PixelBudget::new(1);
+            let bin = test_binary(image, &budget, local);
+            assert_eq!(observation_pattern(bin, f), Err(Error::PixelBudget));
+            assert_eq!(budget.used.get(), 1);
+            let budget = PixelBudget::new(1);
+            let bin = test_binary(image, &budget, local);
+            assert_eq!(find_alignment(bin, center, u, v), Err(Error::PixelBudget));
+            assert_eq!(budget.used.get(), 1);
+        }
+    }
+
+    #[test]
+    fn sampling_exhaustion_is_not_retained_as_a_content_error() {
+        let image = GrayImage::new(&[0; 21 * 21], 21, 21, 21).unwrap();
+        let h = Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+        for local in [false, true] {
+            let budget = PixelBudget::new(1);
+            let bin = test_binary(image, &budget, local);
+            let mut matrix = [0; MAX_MATRIX_BYTES];
+            let mut cs = [0; qr_core::SCRATCH_BYTES];
+            let mut stats = Stats::default();
+            let mut search = SearchContext {
+                matrix: &mut matrix,
+                core_scratch: &mut cs,
+                output: &mut [],
+                segments: &mut [],
+                stats: &mut stats,
+                max_candidates: 1,
+                max_retries: 2,
+                last_error: Some(qr_core::Error::Version),
+            };
+            assert_eq!(search.attempt(bin, h, 21), Err(Error::PixelBudget));
+            assert_eq!(search.last_error, Some(qr_core::Error::Version));
+            assert_eq!(search.stats.retries, 1);
+            assert_eq!(budget.used.get(), 1);
+        }
+    }
+    #[test]
+    fn candidate_and_version_stop_during_alignment_before_sampling() {
+        let bits = include_bytes!("../../../fixtures/v2.bin");
+        let mut pixels = [255; 33 * 33];
+        for y in 0..25 {
+            for x in 0..25 {
+                if bits[(y * 25 + x) / 8] & (128 >> ((y * 25 + x) % 8)) != 0 {
+                    pixels[(y + 4) * 33 + x + 4] = 0;
+                }
+            }
+        }
+        let image = GrayImage::new(&pixels, 33, 33, 33).unwrap();
+        let make = |x, y| Finder {
+            p: Point { x, y },
+            pitch_x: 1.0,
+            pitch_y: 1.0,
+            hits: 1,
+        };
+        let finders = [make(7.5, 7.5), make(25.5, 7.5), make(7.5, 25.5)];
+        // Three 7x7 checks complete; one alignment read completes before exhaustion.
+        let budget = PixelBudget::new(3 * 49 + 1);
+        let bin = test_binary(image, &budget, false);
+        let mut matrix = [0; MAX_MATRIX_BYTES];
+        let mut cs = [0; qr_core::SCRATCH_BYTES];
+        let mut stats = Stats::default();
+        let mut search = SearchContext {
+            matrix: &mut matrix,
+            core_scratch: &mut cs,
+            output: &mut [],
+            segments: &mut [],
+            stats: &mut stats,
+            max_candidates: 1,
+            max_retries: 2,
+            last_error: Some(qr_core::Error::Version),
+        };
+        assert_eq!(search.candidate(bin, finders), Err(Error::PixelBudget));
+        assert_eq!(budget.used.get(), 148);
+        assert_eq!(search.stats.candidates, 1);
+        assert_eq!(search.stats.retries, 0);
+        assert_eq!(search.last_error, Some(qr_core::Error::Version));
     }
 }

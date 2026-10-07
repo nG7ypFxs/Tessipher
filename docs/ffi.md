@@ -35,8 +35,16 @@ C declarations and an executable check are demonstrated in `examples/c_smoke.c`.
 1. Obtain default budgets with `qr_default_config` and adjust them if needed.
 2. Query dimension limits, scratch sizes, and segment/result sizes and alignment with `qr_memory`.
 3. Allocate the required storage in the calling application.
-4. Call `qr_decode_matrix` or `qr_decode_gray`.
+4. Call `qr_decode_matrix`, `qr_decode_gray`, or `qr_decode_gray_with_budget`.
 5. Read payload and segment prefixes using the lengths in `qr_result` only when the return value is 0.
+
+`qr_decode_gray` uses a finite shared limit of 64,000,000 actual input pixel reads.
+`qr_decode_gray_with_budget(config, max_pixel_reads, ...)` keeps the same arguments after the new scalar `size_t` limit.
+The limit accepts 1–`SIZE_MAX`, includes initial min/max and repeated reads across all passes, and charges 26 reads per local threshold decision.
+Zero returns `QR_INVALID_CONFIG` (12); exhaustion returns `QR_PIXEL_BUDGET` (18) before another read.
+The pixel limit does not bound total cycles or caller-buffer initialization.
+ABI version 1, the five-`uint32_t`/20-byte `qr_config`, `qr_result`, and `qr_memory_info` remain unchanged, so existing compiled callers can keep using the old function.
+The new function shares the old numeric, alignment, overlap, buffer, and result contracts.
 
 The C API allocates no storage and does not require the application to use malloc.
 Static storage, arenas, and RTOS task-specific memory are all usable.
@@ -61,7 +69,7 @@ The library cannot validate an arbitrary pointer's allocation, lifetime, actual 
 The result struct is written only on success.
 Scratch, payload, and segment contents are unspecified after failure.
 See the generated header comments for return codes and metadata encodings.
-Invalid sizes or numeric pointer conditions return 1, overlap returns 2, image errors return 10–17, and core errors return 101–110.
+Invalid sizes or numeric pointer conditions return 1, overlap returns 2, detector errors return 10–18, and core errors return 101–110.
 
 ## Measurements on an MCU
 

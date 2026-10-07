@@ -7,9 +7,9 @@
 //! firmware builds use `--no-default-features --release` and a looping panic handler.
 //!
 //! All functions return 0 on success, 1 for invalid numeric pointer/length/alignment
-//! arguments, and 2 for overlapping nonempty ranges. Detector errors are 10..=17:
+//! arguments, and 2 for overlapping nonempty ranges. Detector errors are 10..=18:
 //! invalid image, oversized image, invalid config, short detector scratch, finder
-//! capacity, candidate budget, retry budget, and not found. Core errors are
+//! capacity, candidate budget, retry budget, not found, and pixel-read budget. Core errors are
 //! `100 + qr_core::Error` (101..=110). Result structs are written only on success.
 //! Buffer contents are unspecified on error; only returned prefixes are valid on
 //! success. Numeric checks cannot establish pointer allocation validity.
@@ -119,6 +119,7 @@ fn config(c: QrConfig) -> detect::Config<MAX_WIDTH, MAX_HEIGHT> {
         max_retries: c.max_retries as usize,
         row_step: c.row_step as usize,
         local_radius: c.local_radius as usize,
+        max_pixel_reads: detect::DEFAULT_MAX_PIXEL_READS,
     }
 }
 fn status(e: detect::Error) -> i32 {
@@ -131,6 +132,7 @@ fn status(e: detect::Error) -> i32 {
         detect::Error::CandidateBudget => 15,
         detect::Error::RetryBudget => 16,
         detect::Error::NotFound => 17,
+        detect::Error::PixelBudget => 18,
         detect::Error::Decode(e) => 100 + e as i32,
     }
 }
@@ -292,6 +294,7 @@ pub unsafe extern "C" fn qr_decode_matrix(
     }
 }
 /// Decodes the first symbol found in a borrowed Gray8 ROI.
+/// Uses the finite default pixel-read limit [`detect::DEFAULT_MAX_PIXEL_READS`].
 ///
 /// Pixels start at the ROI's top-left. Width and height must be nonzero,
 /// stride at least width, and storage at least `(height - 1) * stride + width`.
@@ -300,7 +303,7 @@ pub unsafe extern "C" fn qr_decode_matrix(
 /// Segment capacity may not exceed [`qr::core::MAX_SEGMENTS`].
 ///
 /// Returns 0 on success, 1 for invalid numeric arguments, 2 for overlap,
-/// 10..=17 for detector errors, or 101..=110 for core errors. Read only the returned
+/// 10..=18 for detector errors, or 101..=110 for core errors. Read only the returned
 /// payload/segment prefixes on success. `out` is untouched on error; other writable
 /// buffer contents are unspecified. Corners retain sampling order even if core
 /// transpose decoding succeeds; there is no mirrored flag.
@@ -333,6 +336,58 @@ pub unsafe extern "C" fn qr_decode_gray(
     segment_capacity: usize,
     out: *mut QrResult,
 ) -> i32 {
+    unsafe {
+        qr_decode_gray_with_budget(
+            c,
+            detect::DEFAULT_MAX_PIXEL_READS,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+        )
+    }
+}
+/// Like [`qr_decode_gray`], with an explicit shared limit on actual input pixel reads.
+///
+/// `max_pixel_reads` accepts 1..=usize::MAX. Zero returns 12; exhaustion returns 18
+/// before another pixel read. Includes initial min/max, all passes and repeated
+/// reads; local threshold decisions cost 26 reads. The default entry point uses
+/// [`detect::DEFAULT_MAX_PIXEL_READS`]. This limit does not bound total CPU cycles
+/// or initialization of caller-provided buffers. The ABI-1 config/result/memory
+/// layouts remain unchanged. `out` is written only on success.
+/// # Safety
+/// All allocation, lifetime, alignment, disjointness and exclusive-access
+/// requirements of [`qr_decode_gray`] apply without change.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_decode_gray_with_budget(
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrResult,
+) -> i32 {
     let run = || -> Result<(), i32> {
         if segment_capacity > qcore::MAX_SEGMENTS {
             return Err(1);
@@ -346,7 +401,9 @@ pub unsafe extern "C" fn qr_decode_gray(
             range(segments, segment_capacity)?,
             range(out, 1)?,
         ])?;
-        let cfg = config(unsafe { c.read() });
+        let mut cfg = config(unsafe { c.read() });
+        cfg.max_pixel_reads = max_pixel_reads;
+        cfg.scratch_bytes().map_err(status)?;
         let image =
             detect::GrayImage::new(unsafe { bytes(pixels, pixels_len) }, width, height, stride)
                 .map_err(status)?;

@@ -6,7 +6,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Runtime detector budgets; obtain defaults with qr_default_config. */
+/* ABI-1 runtime detector budgets (five u32 fields); obtain defaults with qr_default_config. */
+/* Pixel reads use a finite default or qr_decode_gray_with_budget scalar argument. */
 typedef struct qr_config {
     /* Finder-record capacity per pass (3..=128); default 32. */
     uint32_t max_finders;
@@ -117,7 +118,7 @@ enum qr_status {
     QR_OK = 0, QR_INVALID_ARGUMENT = 1, QR_OVERLAP = 2,
     QR_INVALID_IMAGE = 10, QR_IMAGE_TOO_LARGE = 11, QR_INVALID_CONFIG = 12,
     QR_DETECTOR_SCRATCH_TOO_SMALL = 13, QR_FINDER_CAPACITY = 14,
-    QR_CANDIDATE_BUDGET = 15, QR_RETRY_BUDGET = 16, QR_NOT_FOUND = 17,
+    QR_CANDIDATE_BUDGET = 15, QR_RETRY_BUDGET = 16, QR_NOT_FOUND = 17, QR_PIXEL_BUDGET = 18,
     QR_INVALID_MATRIX = 101, QR_CORE_SCRATCH_TOO_SMALL = 102, QR_FORMAT = 103,
     QR_VERSION = 104, QR_REED_SOLOMON = 105, QR_TRUNCATED = 106,
     QR_UNSUPPORTED_MODE = 107, QR_MALFORMED_PAYLOAD = 108,
@@ -131,7 +132,7 @@ enum qr_mode {
 /* Status: 0 success; 1 invalid numeric pointer/length/alignment argument;
  * 2 overlapping buffers; 10 invalid image; 11 image too large; 12 invalid config;
  * 13 detector scratch shortage; 14 finder capacity; 15 candidate budget;
- * 16 retry budget; 17 no symbol; 101..110 core errors in qr_core::Error order.
+ * 16 retry budget; 17 no symbol; 18 pixel-read budget; 101..110 core errors in qr_core::Error order.
  * ECC values: 0=L, 1=M, 2=Q, 3=H. Mode values are QR mode indicator numbers.
  * FNC1: 0=none, 1=first, 2=second. SA index is zero based, total is 1..16.
  * qr_segment.eci is the last ECI number encountered, initially 3, not an active set.
@@ -168,10 +169,24 @@ int32_t qr_decode_matrix(const uint8_t *bits, size_t bits_len, size_t side,
  * Nonzero width/height, stride >= width, and (height-1)*stride+width bytes are required.
  * Last-row trailing padding is unnecessary; input is never copied.
  * Query qr_memory for compiled limits and both scratch lengths; segment_capacity <= max_segments.
- * Returns QR_OK, QR_INVALID_ARGUMENT, QR_OVERLAP, detector (10..17), or core (101..110) errors.
+ * Returns QR_OK, QR_INVALID_ARGUMENT, QR_OVERLAP, detector (10..18), or core (101..110) errors.
  * Corner order follows sampled-grid (0,0)/(side,0)/(side,side)/(0,side) even after transpose.
- * Coordinates are ROI-relative; there is no mirrored flag. */
+ * Coordinates are ROI-relative; there is no mirrored flag.
+ * Uses a finite limit of 64000000 actual input pixel reads shared across the call. */
 int32_t qr_decode_gray(const qr_config *config,
+    const uint8_t *pixels, size_t pixels_len, size_t width, size_t height, size_t stride,
+    uint8_t *detector_scratch, size_t detector_scratch_len,
+    uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,
+    qr_segment *segments, size_t segment_capacity, qr_result *result);
+
+/* Same pointer, buffer, result and error contract as qr_decode_gray.
+ * max_pixel_reads is 1..SIZE_MAX; zero returns QR_INVALID_CONFIG.
+ * Every actual input read, including min/max, repeats and all passes, is charged.
+ * Local threshold decisions cost 26 reads, including clamped duplicate samples.
+ * Returns QR_PIXEL_BUDGET before another read would exceed the limit.
+ * The limit bounds pixel work, not total cycles or caller-buffer initialization.
+ * The ABI-1 qr_config/qr_result/qr_memory_info layouts are unchanged. */
+int32_t qr_decode_gray_with_budget(const qr_config *config, size_t max_pixel_reads,
     const uint8_t *pixels, size_t pixels_len, size_t width, size_t height, size_t stride,
     uint8_t *detector_scratch, size_t detector_scratch_len,
     uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,

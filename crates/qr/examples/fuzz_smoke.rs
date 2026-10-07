@@ -43,7 +43,7 @@ fn main() {
         let _ = core::decode(m, &mut scratch, &mut output, &mut segments);
         counts[1] += 1;
     }
-    let cfg = detect::Config::<96, 96> {
+    let mut cfg = detect::Config::<96, 96> {
         max_finders: 8,
         max_candidates: 16,
         max_retries: 8,
@@ -59,14 +59,21 @@ fn main() {
             *b = rand(&mut state) as u8;
         }
         let image = detect::GrayImage::new(&pixels, w, h, stride).unwrap();
-        let _ = detect::decode(
+        cfg.max_pixel_reads = (rand(&mut state) % 100_000 + 1) as usize;
+        let mut stats = detect::Stats::default();
+        let result = detect::decode_with_stats(
             image,
             &cfg,
             &mut ds,
             &mut scratch,
             &mut output,
             &mut segments,
+            &mut stats,
         );
+        assert!(stats.pixel_reads <= cfg.max_pixel_reads);
+        if result == Err(detect::Error::PixelBudget) {
+            assert_eq!(stats.pixel_reads, cfg.max_pixel_reads);
+        }
         counts[2] += 1;
     }
     println!(

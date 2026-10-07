@@ -39,6 +39,8 @@ Place the ROI's top-left pixel at `data[0]` and pass the parent frame's stride u
 
 Set independent image limits with `Config::<MAX_WIDTH, MAX_HEIGHT>`.
 Each limit accepts 1–32768, finder capacity accepts 3–128, the candidate budget accepts 1–1,000,000, and the sampling budget accepts 1–65536.
+`max_pixel_reads` accepts 1–`usize::MAX`, defaults to 64,000,000 independently of dimensions, and limits actual reads shared across min/max and all detection passes.
+Each local threshold decision costs 26 reads, including repeats; the next read past the limit immediately returns `PixelBudget`.
 The row step accepts 1–`MAX_HEIGHT`, and local radius accepts 4–128 pixels.
 Invalid settings return `InvalidConfig`; input larger than the configured dimensions returns `ImageTooLarge`.
 
@@ -99,6 +101,10 @@ Scratch, payload, and segment contents are unspecified after a failed call.
 Only read returned prefixes after success.
 The same storage can be reused for each attempt.
 `decode_with_stats` returns scan and budget counters even on failure.
+`Stats.pixel_reads` includes initial min/max and repeated input reads, never exceeds `max_pixel_reads`, and is zero on validation failure.
+Low-contrast input still consumes min/max reads.
+Adding `Config.max_pixel_reads`, `Stats.pixel_reads`, and `Error::PixelBudget` requires external Rust struct literals and exhaustive error matches to be updated; `..Default::default()` can initialize the new fields.
+The C ABI struct layouts remain unchanged; an added entry point accepts the explicit pixel limit.
 
 | Core error | Stage |
 | --- | --- |

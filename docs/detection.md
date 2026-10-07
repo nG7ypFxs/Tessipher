@@ -24,10 +24,20 @@ Geometry and finder-pattern checks reject unsuitable candidates before detailed 
 | Finder records | 32 |
 | Total finder triples examined | 4096 |
 | Total sampling attempts | 256 |
+| Actual input pixel reads | 64,000,000 |
 | Row scan step | 1 pixel |
 
-Candidate and sampling budgets are shared across all threshold and polarity passes.
-`CandidateBudget` and `RetryBudget` explicitly report exhaustion.
+Pixel-read, candidate, and sampling budgets are shared across all threshold and polarity passes.
+`PixelBudget`, `CandidateBudget`, and `RetryBudget` explicitly report exhaustion.
+`Config.max_pixel_reads` accepts 1–`usize::MAX`; zero is invalid.
+Every actual input read consumes the same pixel budget, including initial min/max, repeated coordinates, row scans, cross-checks, finder patterns, alignment search, and matrix sampling.
+The next read after the limit returns `PixelBudget` immediately, regardless of retained decode errors or finder overflow.
+`Stats.pixel_reads` includes min/max and is accurate on success and failure; validation failures read no pixels.
+Low-contrast images consume their min/max reads even though the other counters remain zero.
+A decode that completes at exactly the limit remains successful.
+The finite default is independent of configured image maxima; callers with larger or harder images can choose a different finite limit.
+Measured corpus/benchmark work was 934,433 reads for normal 640×640 V7, 7,964,308 for the 360×360 lighting fixture, and 30,084,436 for the 640×640 undecodable symbol over four passes.
+64,000,000 leaves more than twice the largest of these measurements; this is an operational default, not a recognition guarantee.
 `Stats.retries` and `max_retries` count matrix-sampling attempts, including samples abandoned for invalid geometry.
 A core transpose retry using the same sampled matrix does not consume another sampling attempt.
 The first successfully decoded symbol is returned.
@@ -58,11 +68,13 @@ Fixture coordinates, lighting formulas, and random seeds are recorded in `tools/
 
 ## Computational bounds and operational limits
 
-Scanning uses at most four passes; each local-threshold decision reads 25 pixels.
+Scanning uses at most four passes; each local-threshold decision reads 26 pixels (one center read plus 25 window samples, including repeated/clamped coordinates).
 Alignment search for one detailed candidate examines at most 1089 positions × 25 modules; one matrix-sampling attempt visits at most 177×177 modules.
 A sampled matrix with a normal-orientation content error runs core decoding up to twice.
 Transposition requires no additional scratch, but failed input and mirrors can increase CPU time.
-All loops are bounded by input dimensions, independent candidate budgets, or fixed model limits.
+The shared pixel budget bounds actual input reads independently of candidate and sampling budgets, even on finderless high-contrast images.
+All loops are bounded by input dimensions, independent budgets, or fixed model limits.
+The pixel budget does not bound core decoding, geometry calculations, or FFI initialization of caller-provided buffers.
 These bounds are not a worst-case execution time guarantee on an MCU.
 
 Positioning uses one homography; local grid correction using every alignment pattern is not implemented.

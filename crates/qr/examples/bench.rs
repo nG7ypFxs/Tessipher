@@ -17,6 +17,19 @@ fn main() {
         *t = start.elapsed().as_secs_f64() * 1e6;
     }
     report("matrix-V7-H-mask3", times);
+    // Higher versions exercise the larger alignment-center grids.
+    for (version, bits) in [
+        (32, include_bytes!("../../../fixtures/v32.bin").as_slice()),
+        (40, include_bytes!("../../../fixtures/v40.bin").as_slice()),
+    ] {
+        let matrix = core::Matrix::new(bits, version * 4 + 17).unwrap();
+        for t in &mut times {
+            let start = Instant::now();
+            black_box(core::decode(matrix, &mut cs, &mut out, &mut segments).unwrap());
+            *t = start.elapsed().as_secs_f64() * 1e6;
+        }
+        report(&format!("matrix-V{version}"), times);
+    }
     for case in ["normal", "no-QR", "noise", "undecodable"] {
         let mut pixels = vec![255; 640 * 640];
         let mut rng = 0x12345678u32;

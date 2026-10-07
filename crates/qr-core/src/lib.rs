@@ -171,11 +171,12 @@ pub fn decode(
     if scratch.len() < SCRATCH_BYTES {
         return Err(Error::ScratchTooSmall);
     }
+    let geometry = VersionGeometry::new(matrix.version());
     let normal = OrientedMatrix {
         matrix,
         transposed: false,
     };
-    match decode_oriented(normal, scratch, output, segments) {
+    match decode_oriented(normal, &geometry, scratch, output, segments) {
         Ok(decoded) => Ok(decoded),
         Err(error) if capacity_error(error) || error == Error::InvalidMatrix => Err(error),
         Err(original_error) => {
@@ -183,7 +184,7 @@ pub fn decode(
                 matrix,
                 transposed: true,
             };
-            match decode_oriented(mirrored, scratch, output, segments) {
+            match decode_oriented(mirrored, &geometry, scratch, output, segments) {
                 Ok(decoded) => Ok(decoded),
                 Err(error) if capacity_error(error) => Err(error),
                 Err(_) => Err(original_error),
@@ -194,6 +195,7 @@ pub fn decode(
 
 fn decode_oriented(
     matrix: OrientedMatrix<'_>,
+    geometry: &VersionGeometry,
     scratch: &mut [u8],
     output: &mut [u8],
     segments: &mut [Segment],
@@ -227,7 +229,7 @@ fn decode_oriented(
                 row
             };
             for x in [right, right - 1] {
-                if !is_function(version, x, y) {
+                if !geometry.is_function(x, y) {
                     if bit < total * 8 && (matrix.bit(x, y) ^ mask_bit(mask, x, y)) {
                         raw[bit / 8] |= 0x80 >> (bit % 8);
                     }
@@ -341,31 +343,62 @@ pub fn is_function(version: u8, x: usize, y: usize) -> bool {
     if !(1..=40).contains(&version) {
         return true;
     }
-    let side = version as usize * 4 + 17;
-    if x >= side || y >= side {
-        return true;
-    }
-    if (x < 9 && y < 9) || (x < 9 && y >= side - 8) || (y < 9 && x >= side - 8) || x == 6 || y == 6
-    {
-        return true;
-    }
-    if version >= 7 && ((y < 6 && x >= side - 11) || (x < 6 && y >= side - 11)) {
-        return true;
-    }
-    let mut positions = [0; 7];
-    let count = alignment_positions(version, &mut positions);
-    for i in 0..count {
-        for j in 0..count {
-            if (i == 0 && (j == 0 || j == count - 1)) || (j == 0 && i == count - 1) {
-                continue;
-            }
-            if x.abs_diff(positions[i] as usize) <= 2 && y.abs_diff(positions[j] as usize) <= 2 {
-                return true;
-            }
+    VersionGeometry::new(version).is_function(x, y)
+}
+
+/// Fixed-size geometry shared by both orientations and every module lookup.
+struct VersionGeometry {
+    version: u8,
+    side: usize,
+    alignment: [u8; 7],
+    alignment_count: usize,
+}
+impl VersionGeometry {
+    // Callers have already validated the version.
+    fn new(version: u8) -> Self {
+        let mut alignment = [0; 7];
+        let alignment_count = alignment_positions(version, &mut alignment);
+        Self {
+            version,
+            side: version as usize * 4 + 17,
+            alignment,
+            alignment_count,
         }
     }
-    false
+
+    fn is_function(&self, x: usize, y: usize) -> bool {
+        let side = self.side;
+        if x >= side || y >= side {
+            return true;
+        }
+        if (x < 9 && y < 9)
+            || (x < 9 && y >= side - 8)
+            || (y < 9 && x >= side - 8)
+            || x == 6
+            || y == 6
+        {
+            return true;
+        }
+        if self.version >= 7 && ((y < 6 && x >= side - 11) || (x < 6 && y >= side - 11)) {
+            return true;
+        }
+        // Alignment bands never overlap. Locate each axis independently instead
+        // of visiting every pair of centers, then exclude the three finder corners.
+        let band = |coordinate: usize| {
+            self.alignment[..self.alignment_count]
+                .iter()
+                .position(|&center| coordinate.abs_diff(center as usize) <= 2)
+        };
+        match (band(x), band(y)) {
+            (Some(i), Some(j)) => {
+                !((i == 0 && (j == 0 || j == self.alignment_count - 1))
+                    || (j == 0 && i == self.alignment_count - 1))
+            }
+            _ => false,
+        }
+    }
 }
+
 fn mask_bit(mask: u8, x: usize, y: usize) -> bool {
     match mask {
         0 => (x + y) % 2 == 0,
@@ -486,7 +519,13 @@ mod tests {
             };
             if read_format(view).is_ok() {
                 assert_eq!(
-                    decode_oriented(view, &mut scratch, &mut output, &mut segments),
+                    decode_oriented(
+                        view,
+                        &VersionGeometry::new(matrix.version()),
+                        &mut scratch,
+                        &mut output,
+                        &mut segments,
+                    ),
                     Err(Error::ReedSolomon)
                 );
                 decode(matrix, &mut scratch, &mut output, &mut segments).unwrap();
@@ -537,6 +576,7 @@ mod tests {
                 matrix,
                 transposed: false,
             },
+            &VersionGeometry::new(matrix.version()),
             &mut scratch,
             &mut output,
             &mut segments,
@@ -546,6 +586,7 @@ mod tests {
                 matrix,
                 transposed: true,
             },
+            &VersionGeometry::new(matrix.version()),
             &mut scratch,
             &mut output,
             &mut segments,

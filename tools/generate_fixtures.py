@@ -36,7 +36,7 @@ def control(mode, bits): return QrSegment(QrSegment.Mode(mode,(0,0,0)),0,bits)
 def ub(v,n): return [(v>>i)&1 for i in reversed(range(n))]
 sa=control(3,ub(0,4)+ub(1,4)+ub(0xa7,8))
 fnc=control(9,ub(42,8))
-kanji=QrSegment(QrSegment.Mode.KANJI,2,ub(1855,13)+ub(2586,13)) # 漢字: 8ABF 8E9A
+kanji=QrSegment(QrSegment.Mode.KANJI,2,ub(1855,13)+ub(2586,13)) # Kanji characters: Shift_JIS 8ABF 8E9A
 segments=[sa,fnc,QrSegment.make_eci(26),QrSegment.make_numeric('0012345'),QrSegment.make_alphanumeric('A%B%%C'),QrSegment.make_bytes(bytes([0,255,37])),kanji]
 q=QrCode.encode_segments(segments,QrCode.Ecc.QUARTILE,5,5,6,False)
 (ROOT/'fixtures/modes.bin').write_bytes(packed(q))

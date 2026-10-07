@@ -1,72 +1,72 @@
-# Gray8 検出の探索範囲
+# Gray8 detection search envelope
 
-## 優先順位と予算
+## Priority and budgets
 
-閾値と極性は、全体midrangeの通常色、全体midrangeの反転色、局所平均の通常色、局所平均の反転色の順に試します。
-全体midrangeは画像の最小値と最大値の中点です。
-局所平均は半径24pixelsを既定とする5×5の固定サンプルで算出し、局所コントラストが12未満なら全体閾値を使います。
-画像を全走査したbinary画像は保持しません。
+Threshold and polarity passes run in this order: global midrange normal, global midrange inverted, local mean normal, and local mean inverted.
+The global midrange is the midpoint of the image's minimum and maximum pixel values.
+The local mean uses a fixed 5×5 sample window with a default radius of 24 pixels; when local contrast is below 12, it falls back to the global threshold.
+No full-frame binary image is retained.
 
-finder検出は行走査の1:1:3:1:1から開始し、縦横のcross-checkと7×7パターン確認で候補を絞ります。
-近接した観測を固定容量のクラスタに統合し、観測回数の降順、同点なら走査順で候補を並べます。
-満杯のときは最も弱い単独観測を新しい観測で置き換えられます。
-それでも候補を捨てた事実は保持し、復号に成功しなければ `FinderCapacity` を返します。
+Finder detection starts with the 1:1:3:1:1 ratio in row scans and filters observations using vertical/horizontal cross-checks and a 7×7 pattern check.
+Nearby observations are merged into fixed-capacity clusters, ranked by descending observation count, with scan order breaking ties.
+When full, a new observation may replace the weakest cluster with a single observation.
+Discarding observations is still recorded; if decoding does not succeed, the call returns `FinderCapacity`.
 
-候補三点の組合せを順番に調べ、最長辺の対角を左上として向きを定めます。
-finderには画像の水平・垂直方向の走査pitchを別々に保存します。
-観測パターン確認とversion推定では二方向のpitchを使い、回転時の走査断面とシンボル軸の違いを補正します。
-1 finder recordは20bytesで、既定の32 recordsを含むdetector scratchは4557bytesです。
-推定version、−1、＋1、−2、＋2の順に、1–40内の候補だけを試します。
-幾何形状とfinderパターンで不適当な候補を除いてから、詳細なサンプリングへ進みます。
+Finder triples are examined in order, choosing the point opposite the longest edge as top-left and determining the orientation.
+Finder records store image-horizontal and image-vertical scan pitches separately.
+Pattern checks and version estimates use both pitches and account for the difference between rotated scan cross-sections and symbol axes.
+Each finder record occupies 20 bytes; detector scratch with the default 32 records occupies 4557 bytes.
+Versions are tried in the order estimate, −1, +1, −2, +2, retaining only values in 1–40.
+Geometry and finder-pattern checks reject unsuitable candidates before detailed sampling.
 
-| 既定値 | 上限 |
+| Setting | Default limit |
 | --- | ---: |
-| finder records | 32 |
-| 検査する三点組合せの合計 | 4096 |
-| サンプリング試行の合計 | 256 |
-| 行走査間隔 | 1pixel |
+| Finder records | 32 |
+| Total finder triples examined | 4096 |
+| Total sampling attempts | 256 |
+| Row scan step | 1 pixel |
 
-組合せ予算と再試行予算は全閾値と極性で共有します。
-`CandidateBudget` と `RetryBudget` は上限へ達したことを明示します。
-`Stats.retries` と `max_retries` は行列のサンプリング試行を数えます。
-同じサンプリング結果内でcoreが行う転置復号は、追加のサンプリングとして数えません。
-成功時は最初に復号できた1件を返します。
-複数コードを含む画像で全コードを列挙する契約はありません。
+Candidate and sampling budgets are shared across all threshold and polarity passes.
+`CandidateBudget` and `RetryBudget` explicitly report exhaustion.
+`Stats.retries` and `max_retries` count matrix-sampling attempts, including samples abandoned for invalid geometry.
+A core transpose retry using the same sampled matrix does not consume another sampling attempt.
+The first successfully decoded symbol is returned.
+There is no contract to enumerate every symbol in an image containing multiple codes.
 
-## 射影と位置合わせ
+## Perspective and alignment
 
-V2以降では右下alignmentの予想位置を中心に、各方向±8modulesを0.5module刻みで探索します。
-3 finderとalignmentの4対応点から8係数のhomographyを求めます。
-一致度が高く予想位置に近いalignmentを優先します。
+For V2 and above, the detector searches around the predicted bottom-right alignment center over ±8 modules on each axis, in 0.5-module steps.
+The three finders and alignment center supply four point correspondences for an eight-coefficient homography.
+An alignment match is preferred when its score is high and its position is close to the prediction.
 
-alignmentを使った試行の後は、affineの第4点、および縦横の辺長の±10%を動かした8通りの第4点を試します。
-V1でもこの第4点探索を行うため、alignmentのないシンボルで射影変形を扱えます。
-サンプリングはmodule中心の1pixelで行い、画像外または非有限座標を含む試行は破棄します。
+After the alignment-based attempt, the detector tries the affine fourth point and eight alternatives formed by changing horizontal and vertical edge lengths by ±10%.
+This fourth-point search also runs for V1, allowing perspective correction without an alignment pattern.
+Sampling reads one pixel at each module center; attempts containing out-of-image or nonfinite coordinates are discarded.
 
-鏡像はサンプリング後にcoreの転置再試行で復号します。
-`corners` はサンプリング座標の `(0,0)`、`(side,0)`、`(side,side)`、`(0,side)` を画像へ写した順を維持します。
-鏡像成功時も順序を入れ替えないため、復号後の論理的な右上と左下はそれぞれ `corners[3]` と `corners[1]` に対応します。
-公開結果に鏡像フラグはありません。
+Mirrors are decoded through the core's transpose retry after sampling.
+`corners` remain the projections of sampled-grid boundaries `(0,0)`, `(side,0)`, `(side,side)`, and `(0,side)` into the ROI.
+Their order is unchanged on mirrored success, so logical top-right and bottom-left after decoding correspond to `corners[3]` and `corners[1]`, respectively.
+The public result has no mirrored flag.
 
-回転角や射影歪み全域の成功率は保証していません。
-V7の同じ行列を4×4、2×4、4×2pixels/moduleで描画した矩形画像も既定設定で検証しています。
-これらの成功は任意の非等方変形や射影の成功を保証しません。
-現在の固定corpusでは17°、45°、90°刻みの回転、V1の強射影、V7のalignment射影、白黒反転、照明勾配、軽いランダムノイズを検証しています。
-強いV1射影のfixtureはaffine試行では失敗し、第4点探索で成功します。
-局所閾値のfixtureは全体閾値では復号できず、第3passで成功します。
-fixture生成の座標、照明式、乱数seedは `tools/generate_fixtures.py` と `crates/qr-detect/tests/images.rs` にあります。
+Success across all rotation angles or perspective distortions is not guaranteed.
+The default configuration has also been tested on rectangular images rendering the same V7 matrix at 4×4, 2×4, and 4×2 pixels per module.
+These cases do not guarantee success under arbitrary anisotropic or perspective deformation.
+The current fixed corpus covers 17°, 45°, and quarter-turn rotations, strong V1 perspective, V7 alignment-based perspective, inverted polarity, lighting gradients, and mild random noise.
+The strong-perspective V1 fixture fails the affine attempt and succeeds through fourth-point search.
+The local-threshold fixture fails global thresholds and succeeds on the third pass.
+Fixture coordinates, lighting formulas, and random seeds are recorded in `tools/generate_fixtures.py` and `crates/qr-detect/tests/images.rs`.
 
-## 計算量と運用上の限界
+## Computational bounds and operational limits
 
-走査は最大4passで、局所閾値は1判定あたり25pixelsを読みます。
-1詳細候補のalignment探索は最大1089位置×25modules、1matrix試行は最大177×177modulesです。
-通常方向で内容エラーになった行列は、coreの復号処理を最大2回実行します。
-転置に伴うscratchの増加はありませんが、失敗入力や鏡像ではCPU時間が増えます。
-全ループは入力寸法、独立した候補予算、固定モデル上限によって有限です。
-この上限はMCU上の実時間を保証するWCETではありません。
+Scanning uses at most four passes; each local-threshold decision reads 25 pixels.
+Alignment search for one detailed candidate examines at most 1089 positions × 25 modules; one matrix-sampling attempt visits at most 177×177 modules.
+A sampled matrix with a normal-orientation content error runs core decoding up to twice.
+Transposition requires no additional scratch, but failed input and mirrors can increase CPU time.
+All loops are bounded by input dimensions, independent candidate budgets, or fixed model limits.
+These bounds are not a worst-case execution time guarantee on an MCU.
 
-位置合わせは一つのhomographyを使い、全alignmentを用いた局所グリッド補正は実装していません。
-参照算法との差だけで規格違反とは判断しておらず、局所歪みへの追加対応は別の機能として扱います。
-レンズ歪み、モーションブラー、強い反射、finder欠損、moduleが1pixel未満の画像、quiet zone不足、実カメラ固有のノイズは別途評価が必要です。
-既定の局所半径24は全module pitchに最適ではないため、撮像系に合わせて `local_radius` と `row_step` を設定してください。
-`FinderCapacity` などは呼出側が予算を増やす、ROIを絞る、次フレームで再試行するといった判断に使えます。
+Positioning uses one homography; local grid correction using every alignment pattern is not implemented.
+A difference from a reference algorithm alone is not treated as a standards violation; further local-distortion handling would be a separate feature.
+Lens distortion, motion blur, strong reflections, missing finders, modules smaller than one pixel, inadequate quiet zones, and camera-specific noise require separate evaluation.
+The default local radius of 24 is not optimal for every module pitch; tune `local_radius` and `row_step` for the imaging system.
+Errors such as `FinderCapacity` can guide callers to increase budgets, narrow the ROI, or retry on the next frame.

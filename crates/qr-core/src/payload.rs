@@ -1,11 +1,5 @@
-use crate::{Error, Fnc1, Mode, Segment, StructuredAppend};
+use crate::{Error, Fnc1, Mode, PayloadInfo, Segment, StructuredAppend};
 const ALPHA: &[u8; 45] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
-pub(crate) struct Parsed {
-    pub len: usize,
-    pub segments: usize,
-    pub fnc1: Fnc1,
-    pub sa: Option<StructuredAppend>,
-}
 struct Bits<'a> {
     data: &'a [u8],
     pos: usize,
@@ -63,13 +57,13 @@ pub(crate) fn parse(
     version: u8,
     output: &mut [u8],
     segments: &mut [Segment],
-) -> Result<Parsed, Error> {
+) -> Result<PayloadInfo, Error> {
     let mut bits = Bits { data, pos: 0 };
-    let mut r = Parsed {
-        len: 0,
-        segments: 0,
+    let mut r = PayloadInfo {
+        payload_len: 0,
+        segment_count: 0,
         fnc1: Fnc1::None,
-        sa: None,
+        structured_append: None,
     };
     let mut eci = 3;
     let group = if version <= 9 {
@@ -103,13 +97,13 @@ pub(crate) fn parse(
             9 => Mode::Fnc1Second,
             _ => return Err(Error::UnsupportedMode),
         };
-        if r.segments >= segments.len() {
+        if r.segment_count >= segments.len() {
             return Err(Error::SegmentsTooSmall);
         }
-        let start = r.len;
+        let start = r.payload_len;
         match mode {
             Mode::StructuredAppend => {
-                if r.segments != 0 {
+                if r.segment_count != 0 {
                     return Err(Error::MalformedPayload);
                 }
                 let index = bits.read(4)? as u8;
@@ -118,7 +112,7 @@ pub(crate) fn parse(
                 if index >= total {
                     return Err(Error::MalformedPayload);
                 }
-                r.sa = Some(StructuredAppend {
+                r.structured_append = Some(StructuredAppend {
                     index,
                     total,
                     parity,
@@ -183,12 +177,12 @@ pub(crate) fn parse(
                                 return Err(Error::MalformedPayload);
                             }
                             if k == 3 {
-                                emit(output, &mut r.len, b'0' + (v / 100) as u8)?;
+                                emit(output, &mut r.payload_len, b'0' + (v / 100) as u8)?;
                             }
                             if k >= 2 {
-                                emit(output, &mut r.len, b'0' + (v / 10 % 10) as u8)?;
+                                emit(output, &mut r.payload_len, b'0' + (v / 10 % 10) as u8)?;
                             }
-                            emit(output, &mut r.len, b'0' + (v % 10) as u8)?;
+                            emit(output, &mut r.payload_len, b'0' + (v % 10) as u8)?;
                             count -= k;
                         }
                     }
@@ -200,8 +194,8 @@ pub(crate) fn parse(
                             if v >= 45 * 45 {
                                 return Err(Error::MalformedPayload);
                             }
-                            alpha(output, &mut r.len, ALPHA[v / 45], fnc, &mut pending)?;
-                            alpha(output, &mut r.len, ALPHA[v % 45], fnc, &mut pending)?;
+                            alpha(output, &mut r.payload_len, ALPHA[v / 45], fnc, &mut pending)?;
+                            alpha(output, &mut r.payload_len, ALPHA[v % 45], fnc, &mut pending)?;
                             count -= 2;
                         }
                         if count == 1 {
@@ -209,16 +203,16 @@ pub(crate) fn parse(
                             if v >= 45 {
                                 return Err(Error::MalformedPayload);
                             }
-                            alpha(output, &mut r.len, ALPHA[v], fnc, &mut pending)?;
+                            alpha(output, &mut r.payload_len, ALPHA[v], fnc, &mut pending)?;
                         }
                         if pending {
-                            emit(output, &mut r.len, 29)?;
+                            emit(output, &mut r.payload_len, 29)?;
                         }
                     }
                     Mode::Byte => {
                         for _ in 0..count {
                             let b = bits.read(8)? as u8;
-                            emit(output, &mut r.len, b)?;
+                            emit(output, &mut r.payload_len, b)?;
                         }
                     }
                     Mode::Kanji => {
@@ -235,21 +229,21 @@ pub(crate) fn parse(
                             {
                                 return Err(Error::MalformedPayload);
                             }
-                            emit(output, &mut r.len, hi)?;
-                            emit(output, &mut r.len, lo)?;
+                            emit(output, &mut r.payload_len, hi)?;
+                            emit(output, &mut r.payload_len, lo)?;
                         }
                     }
                     _ => unreachable!(),
                 }
             }
         }
-        segments[r.segments] = Segment {
+        segments[r.segment_count] = Segment {
             mode,
             offset: start,
-            len: r.len - start,
+            len: r.payload_len - start,
             eci,
         };
-        r.segments += 1;
+        r.segment_count += 1;
     }
     Ok(r)
 }

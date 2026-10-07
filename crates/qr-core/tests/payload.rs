@@ -22,10 +22,100 @@ type Parsed = (Vec<u8>, Vec<Segment>, Fnc1, Option<StructuredAppend>);
 fn parse(b: Bits) -> Result<Parsed, Error> {
     let mut out = vec![0; 7089];
     let mut seg = vec![Segment::EMPTY; 128];
-    let (n, s, f, a) = parse_payload(&b.bytes(), 1, &mut out, &mut seg)?;
-    out.truncate(n);
-    seg.truncate(s);
-    Ok((out, seg, f, a))
+    let data = b.bytes();
+    let mut legacy_out = out.clone();
+    let mut legacy_seg = seg.clone();
+    let named = parse_payload_info(&data, 1, &mut out, &mut seg);
+    let legacy = parse_payload(&data, 1, &mut legacy_out, &mut legacy_seg);
+    assert_eq!(
+        named.map(|r| (r.payload_len, r.segment_count, r.fnc1, r.structured_append)),
+        legacy
+    );
+    let info = named?;
+    out.truncate(info.payload_len);
+    seg.truncate(info.segment_count);
+    assert_eq!(out, legacy_out[..info.payload_len]);
+    assert_eq!(seg, legacy_seg[..info.segment_count]);
+    Ok((out, seg, info.fnc1, info.structured_append))
+}
+
+#[test]
+fn named_payload_metadata_and_boundaries() {
+    for version in [1, 9, 10, 26, 27, 40] {
+        let data = Bits::default()
+            .add(4, 4)
+            .add(1, if version <= 9 { 8 } else { 16 })
+            .add(0xff, 8)
+            .add(0, 4)
+            .bytes();
+        let mut output = [0; 1];
+        let mut segments = [Segment::EMPTY; 1];
+        assert_eq!(
+            parse_payload_info(&data, version, &mut output, &mut segments),
+            Ok(PayloadInfo {
+                payload_len: 1,
+                segment_count: 1,
+                fnc1: Fnc1::None,
+                structured_append: None,
+            })
+        );
+        assert_eq!(output, [0xff]);
+        assert_eq!(segments[0].mode, Mode::Byte);
+        assert_eq!(
+            (segments[0].offset, segments[0].len, segments[0].eci),
+            (0, 1, 3)
+        );
+        for (out_capacity, segment_capacity, error) in [
+            (0, 1, Error::OutputTooSmall),
+            (1, 0, Error::SegmentsTooSmall),
+        ] {
+            assert_eq!(
+                parse_payload_info(
+                    &data,
+                    version,
+                    &mut output[..out_capacity],
+                    &mut segments[..segment_capacity]
+                ),
+                Err(error)
+            );
+            assert_eq!(
+                parse_payload(
+                    &data,
+                    version,
+                    &mut output[..out_capacity],
+                    &mut segments[..segment_capacity]
+                ),
+                Err(error)
+            );
+        }
+    }
+    for data in [&[][..], &[0][..], &[0; MAX_DATA_CODEWORDS][..]] {
+        assert_eq!(
+            parse_payload_info(data, 40, &mut [], &mut []),
+            Ok(PayloadInfo {
+                payload_len: 0,
+                segment_count: 0,
+                fnc1: Fnc1::None,
+                structured_append: None,
+            })
+        );
+    }
+    for (data, version, error) in [
+        (&[][..], 0, Error::MalformedPayload),
+        (&[][..], 41, Error::MalformedPayload),
+        (&[0; MAX_DATA_CODEWORDS + 1][..], 1, Error::MalformedPayload),
+        (&[0x40][..], 1, Error::Truncated),
+    ] {
+        let mut segments = [Segment::EMPTY; 1];
+        assert_eq!(
+            parse_payload_info(data, version, &mut [], &mut segments),
+            Err(error)
+        );
+        assert_eq!(
+            parse_payload(data, version, &mut [], &mut segments),
+            Err(error)
+        );
+    }
 }
 #[test]
 fn eci_lengths_and_application() {

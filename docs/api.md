@@ -70,6 +70,28 @@ FNC1後にもECIを指定でき、以降のセグメントの `eci` に最後の
 Structured Appendは0始まりindex、1–16のtotal、parity byteを返し、`index >= total`、後置または重複した制御指定を拒否します。
 ECIは最大999999までの1/2/3byte表現を受け付けます。
 
+## 訂正済みcodewordの解析
+
+別のdemodulatorで得た訂正済みdata codewordには `qr_core::parse_payload_info` を使えます。
+返す `PayloadInfo` のフィールドは `Decoded` と同じ `payload_len`、`segment_count`、`fnc1`、`structured_append` です。
+復号行列のversion、ECC、mask、訂正数、BCH距離はこの型に含みません。
+versionは1から40、dataの長さは `MAX_DATA_CODEWORDS` 以下である必要があります。
+終端子と4bit未満のゼロpaddingを受理し、容量不足と失敗時の部分出力は他の復号入口と同じ契約です。
+
+```rust
+use qr::core::{parse_payload_info, Segment};
+
+let mut output = [0; 1];
+let mut segments = [Segment::EMPTY; 1];
+// V1のByteモード、長さ1、文字A、終端子。
+let info = parse_payload_info(&[0x40, 0x14, 0x10], 1, &mut output, &mut segments)?;
+assert_eq!(&output[..info.payload_len], b"A");
+assert_eq!(info.segment_count, 1);
+```
+
+既存の `parse_payload` は `(payload_len, segment_count, fnc1, structured_append)` のtupleを返し続けます。
+両入口は同じ解析実装を使います。
+
 ## エラーと部分出力
 
 失敗した呼出しの作業領域、payload、セグメントの内容は未規定です。

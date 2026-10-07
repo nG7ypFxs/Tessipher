@@ -98,6 +98,15 @@ pub struct Decoded {
     pub structured_append: Option<StructuredAppend>,
 }
 
+/// Metadata from parsing corrected data codewords, without matrix or ECC information.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PayloadInfo {
+    pub payload_len: usize,
+    pub segment_count: usize,
+    pub fnc1: Fnc1,
+    pub structured_append: Option<StructuredAppend>,
+}
+
 /// Validated, borrowed module matrix. A set bit denotes a dark module.
 #[derive(Clone, Copy)]
 pub struct Matrix<'a> {
@@ -280,29 +289,59 @@ fn decode_oriented(
         version,
         ec_level,
         mask,
-        payload_len: parsed.len,
-        segment_count: parsed.segments,
+        payload_len: parsed.payload_len,
+        segment_count: parsed.segment_count,
         corrected_codewords: corrected,
         format_distance,
         version_distance,
         fnc1: parsed.fnc1,
-        structured_append: parsed.sa,
+        structured_append: parsed.structured_append,
     })
 }
 
 /// Parses corrected data codewords. Useful for separate demodulators and fuzzing.
 /// Version must be 1..=40; terminator and short zero padding are accepted.
+/// The tuple contains payload length, segment count, FNC1 and Structured Append.
+/// For named fields, use [`parse_payload_info`].
 pub fn parse_payload(
     data: &[u8],
     version: u8,
     output: &mut [u8],
     segments: &mut [Segment],
 ) -> Result<(usize, usize, Fnc1, Option<StructuredAppend>), Error> {
+    let info = parse_payload_info(data, version, output, segments)?;
+    Ok((
+        info.payload_len,
+        info.segment_count,
+        info.fnc1,
+        info.structured_append,
+    ))
+}
+
+/// Parses corrected data codewords and returns named payload metadata.
+/// Version must be 1..=40 and data must not exceed [`MAX_DATA_CODEWORDS`].
+/// Terminator and short zero padding are accepted. Output and segment contents
+/// are unspecified on error; on success, read only the returned lengths.
+///
+/// ```
+/// use qr_core::{parse_payload_info, Segment};
+/// let mut output = [0; 1];
+/// let mut segments = [Segment::EMPTY; 1];
+/// let info = parse_payload_info(&[0x40, 0x14, 0x10], 1, &mut output, &mut segments)?;
+/// assert_eq!(&output[..info.payload_len], b"A");
+/// assert_eq!(info.segment_count, 1);
+/// # Ok::<(), qr_core::Error>(())
+/// ```
+pub fn parse_payload_info(
+    data: &[u8],
+    version: u8,
+    output: &mut [u8],
+    segments: &mut [Segment],
+) -> Result<PayloadInfo, Error> {
     if !(1..=40).contains(&version) || data.len() > MAX_DATA_CODEWORDS {
         return Err(Error::MalformedPayload);
     }
-    let r = payload::parse(data, version, output, segments)?;
-    Ok((r.len, r.segments, r.fnc1, r.sa))
+    payload::parse(data, version, output, segments)
 }
 
 pub fn raw_codewords(version: u8) -> usize {

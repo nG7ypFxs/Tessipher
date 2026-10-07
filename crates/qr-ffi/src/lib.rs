@@ -1,4 +1,21 @@
-//! Thin allocation-free C ABI. See the generated `tessipher.h` and `docs/ffi.md`.
+//! Allocation-free C ABI for QR Model 2 matrix and Gray8 decoding.
+//!
+//! Call [`qr_default_config`] and [`qr_memory`] before allocating caller-owned
+//! storage. [`qr_decode_matrix`] and [`qr_decode_gray`] borrow input and initialize
+//! writable scratch, payload, and segment storage before constructing Rust slices.
+//! No allocator is required. With the default `host` feature this crate links std;
+//! firmware builds use `--no-default-features --release` and a looping panic handler.
+//!
+//! All functions return 0 on success, 1 for invalid numeric pointer/length/alignment
+//! arguments, and 2 for overlapping nonempty ranges. Detector errors are 10..=17:
+//! invalid image, oversized image, invalid config, short detector scratch, finder
+//! capacity, candidate budget, retry budget, and not found. Core errors are
+//! `100 + qr_core::Error` (101..=110). Result structs are written only on success.
+//! Buffer contents are unspecified on error; only returned prefixes are valid on
+//! success. Numeric checks cannot establish pointer allocation validity.
+//!
+//! The generated C header `include/tessipher.h` and repository `docs/ffi.md`
+//! describe the same ABI and embedded integration contract.
 #![cfg_attr(not(feature = "host"), no_std)]
 #![deny(unsafe_op_in_unsafe_fn)]
 use core::{
@@ -7,7 +24,18 @@ use core::{
 };
 use qr::{core as qcore, detect};
 include!(concat!(env!("OUT_DIR"), "/dimensions.rs"));
-macro_rules! abi_struct {($rust:ident => $c:literal {$($field:ident:$ty:ident),*})=>{#[derive(Clone,Copy,Debug,Default)]#[repr(C)]pub struct $rust{$(pub $field:$ty),*}};}
+macro_rules! abi_struct {
+    ($(#[doc = $doc:literal])* $rust:ident => $c:literal {
+        $($(#[doc = $field_doc:literal])* $field:ident:$ty:ident),*
+    }) => {
+        $(#[doc = $doc])*
+        #[derive(Clone, Copy, Debug, Default)]
+        #[repr(C)]
+        pub struct $rust {
+            $($(#[doc = $field_doc])* pub $field: $ty),*
+        }
+    };
+}
 include!("../abi_schema.rs");
 abi_schema!();
 #[cfg(not(feature = "host"))]
@@ -134,9 +162,14 @@ fn result(d: qcore::Decoded) -> QrResult {
     }
     r
 }
-/// Writes the default runtime budgets.
+/// Writes default runtime budgets: 32 finders, 4096 candidates, 256 sampling
+/// attempts, row step 1, and local radius 24.
+///
+/// Returns 0 on success or 1 for a null, misaligned, or numerically invalid pointer.
+/// Does not allocate; `out` need not be initialized.
 /// # Safety
-/// `out` must point to a writable aligned `QrConfig` allocation.
+/// `out` must point to a live, writable, properly aligned allocation for one
+/// [`QrConfig`], with exclusive access for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn qr_default_config(out: *mut QrConfig) -> i32 {
     if range(out, 1).is_err() {
@@ -154,9 +187,15 @@ pub unsafe extern "C" fn qr_default_config(out: *mut QrConfig) -> i32 {
     }
     0
 }
-/// Queries compiled dimensions, memory sizes and alignment.
+/// Queries compiled dimensions, scratch requirements, and target struct layouts.
+///
+/// Returns 0 on success, 1 for invalid pointer arithmetic/alignment, 2 for overlap,
+/// or 12 for invalid configuration. `out` is written only on success.
 /// # Safety
-/// Both pointers must address valid, aligned, nonoverlapping allocations; `out` is writable.
+/// `c` must point to one initialized, readable [`QrConfig`] that remains unchanged.
+/// `out` must point to writable storage for one [`QrMemory`], with exclusive access.
+/// Both allocations must remain live, aligned, and mutually disjoint throughout
+/// the call. `out` need not be initialized.
 #[no_mangle]
 pub unsafe extern "C" fn qr_memory(c: *const QrConfig, out: *mut QrMemory) -> i32 {
     let run = || -> Result<(), i32> {
@@ -187,10 +226,27 @@ pub unsafe extern "C" fn qr_memory(c: *const QrConfig, out: *mut QrMemory) -> i3
         Err(e) => e,
     }
 }
-/// Decodes a packed matrix.
+/// Decodes a packed row-major, MSB-first matrix without row padding.
+///
+/// `side` must be `17 + 4 * version` for version 1..=40. Supply at least
+/// [`qr::core::SCRATCH_BYTES`] scratch bytes. Segment capacity may not exceed
+/// [`qr::core::MAX_SEGMENTS`]. Both output capacities may be smaller than the
+/// maximum; insufficient space returns a core capacity error.
+/// Normal orientation is tried first, then its transpose after content errors.
+///
+/// Returns 0 on success, 1 for invalid numeric arguments, 2 for overlap, or
+/// 101..=110 for core errors. Read only the prefixes specified in `out` on success.
+/// `out` is untouched on error; other writable buffer contents are unspecified.
+/// Detection-only result fields are zero.
 /// # Safety
-/// All spans must address allocations of the declared lengths; writable spans and result
-/// must be exclusive, disjoint from every input, and correctly aligned. See docs/ffi.md.
+/// Every nonempty span must lie in one live allocation of its declared length and
+/// alignment, with the input initialized and unchanged during the call. Scratch,
+/// payload, segments, and `out` require exclusive writable access and need not be
+/// initialized. All nonempty ranges, including inputs, must be mutually disjoint.
+/// `out` is mandatory and must hold one aligned [`QrResult`]. Null is allowed only
+/// for zero-length byte/segment spans. No concurrent thread, DMA, or interrupt may
+/// access writable ranges or modify input. Numeric validation cannot prove these
+/// allocation, lifetime, or access requirements.
 #[allow(clippy::too_many_arguments)]
 #[no_mangle]
 pub unsafe extern "C" fn qr_decode_matrix(
@@ -235,10 +291,29 @@ pub unsafe extern "C" fn qr_decode_matrix(
         Err(e) => e,
     }
 }
-/// Decodes one Gray8 ROI.
+/// Decodes the first symbol found in a borrowed Gray8 ROI.
+///
+/// Pixels start at the ROI's top-left. Width and height must be nonzero,
+/// stride at least width, and storage at least `(height - 1) * stride + width`.
+/// The last row needs no trailing padding. Compiled limits are [`MAX_WIDTH`] and
+/// [`MAX_HEIGHT`]; query [`qr_memory`] for scratch sizes and alignment.
+/// Segment capacity may not exceed [`qr::core::MAX_SEGMENTS`].
+///
+/// Returns 0 on success, 1 for invalid numeric arguments, 2 for overlap,
+/// 10..=17 for detector errors, or 101..=110 for core errors. Read only the returned
+/// payload/segment prefixes on success. `out` is untouched on error; other writable
+/// buffer contents are unspecified. Corners retain sampling order even if core
+/// transpose decoding succeeds; there is no mirrored flag.
 /// # Safety
-/// All pointers must satisfy the allocation, length, alignment and exclusivity contract in
-/// docs/ffi.md. This function checks numeric bounds and overlap, but cannot prove allocation validity.
+/// Each nonempty span must lie in one live allocation of its declared length and
+/// alignment. `c` must hold an initialized [`QrConfig`]; it and all input pixels
+/// must remain unchanged during the call. Both scratch buffers, payload, segments,
+/// and `out` require exclusive writable access and need not be initialized.
+/// All nonempty ranges, including inputs, must be mutually disjoint. `c` and `out`
+/// are mandatory; `out` must hold one aligned [`QrResult`]. Null is allowed only
+/// for zero-length byte/segment spans. No concurrent thread, DMA, or interrupt may
+/// access writable ranges or modify input. Numeric validation cannot prove these
+/// allocation, lifetime, or access requirements.
 #[allow(clippy::too_many_arguments)]
 #[no_mangle]
 pub unsafe extern "C" fn qr_decode_gray(

@@ -20,7 +20,7 @@ fn main() {
     fs::write(
         out.join("dimensions.rs"),
         format!(
-            "pub const MAX_WIDTH: usize = {};\npub const MAX_HEIGHT: usize = {};\n",
+            "/// Compiled maximum ROI width in pixels, set by QR_MAX_WIDTH (default 640).\npub const MAX_WIDTH: usize = {};\n/// Compiled maximum ROI height in pixels, set by QR_MAX_HEIGHT (default 640).\npub const MAX_HEIGHT: usize = {};\n",
             dimensions[0], dimensions[1]
         ),
     )
@@ -37,7 +37,19 @@ fn main() {
             "float"
         };
     }
-    macro_rules! abi_struct {($rust:ident => $c:literal {$($field:ident:$ty:ident),*})=>{{header.push_str(concat!("typedef struct ",$c," {\n"));$(header.push_str(concat!("    ",c_type!($ty)," ",stringify!($field),";\n"));)*header.push_str(concat!("} ",$c,";\n"));}};}
+    macro_rules! abi_struct {
+        ($(#[doc = $doc:literal])* $rust:ident => $c:literal {
+            $($(#[doc = $field_doc:literal])* $field:ident:$ty:ident),*
+        }) => {{
+            $(header.push_str(concat!("/*", $doc, " */\n"));)*
+            header.push_str(concat!("typedef struct ", $c, " {\n"));
+            $(
+                $(header.push_str(concat!("    /*", $field_doc, " */\n"));)*
+                header.push_str(concat!("    ", c_type!($ty), " ", stringify!($field), ";\n"));
+            )*
+            header.push_str(concat!("} ", $c, ";\n"));
+        }};
+    }
     abi_schema!();
     header.push_str(include_str!("prototypes.h"));
     header.push_str("\n#ifdef __cplusplus\n}\n#endif\n#endif\n");

@@ -2,62 +2,122 @@
 //!
 //! Matrix storage is packed row-major, most-significant bit first, with no row padding.
 //! Scratch is byte-aligned. On failure, scratch and output contents are unspecified.
+//! Only the returned payload and segment prefixes are valid after success.
+//!
+//! Use [`Matrix::new`] and [`decode`] for sampled modules, or
+//! [`parse_payload_info`] for data codewords already corrected by another demodulator.
+//! Byte segments remain raw bytes; Kanji segments produce two-byte Shift_JIS values.
+//! ECI assignments are recorded without applying charset, encryption, or compression
+//! transformations. FNC1 percent escapes are processed within each Alphanumeric
+//! segment. Structured Append metadata is returned without joining symbols.
+//!
+//! ```
+//! use qr_core::{Matrix, MAX_MATRIX_BYTES};
+//! let mut bits = [0; MAX_MATRIX_BYTES];
+//! bits[0] = 0x80; // The module at (0, 0) is dark.
+//! let matrix = Matrix::new(&bits, 21)?;
+//! assert_eq!(matrix.version(), 1);
+//! assert_eq!(matrix.get(0, 0), Some(true));
+//! assert_eq!(matrix.get(1, 0), Some(false));
+//! # Ok::<(), qr_core::Error>(())
+//! ```
 #![no_std]
 #![forbid(unsafe_code)]
 mod payload;
 mod rs;
 mod tables;
 
+/// Largest supported QR Model 2 version (40).
 pub const MAX_VERSION: u8 = 40;
+/// Largest supported side length, in modules (177).
 pub const MAX_SIDE: usize = 177;
+/// Bytes required for a packed version-40 matrix, without row padding.
 pub const MAX_MATRIX_BYTES: usize = (MAX_SIDE * MAX_SIDE).div_ceil(8);
+/// Maximum combined data and error-correction codeword count.
 pub const MAX_CODEWORDS: usize = 3706;
+/// Maximum data codeword count after error correction and deinterleaving.
 pub const MAX_DATA_CODEWORDS: usize = 2956;
+/// Maximum decoded payload length, set by Numeric mode capacity.
 pub const MAX_PAYLOAD_BYTES: usize = 7089;
 /// Conservative upper bound, including control segments and empty segments.
 pub const MAX_SEGMENTS: usize = MAX_DATA_CODEWORDS * 2;
+/// Required scratch length for [`decode`], independent of matrix version.
 pub const SCRATCH_BYTES: usize = MAX_CODEWORDS + MAX_DATA_CODEWORDS + 255 + rs::WORK_BYTES;
+/// Required scratch alignment, in bytes (1).
 pub const SCRATCH_ALIGN: usize = 1;
 
+/// Matrix decoding and payload parsing failures.
+///
+/// Output and segment contents are unspecified after any error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Error {
+    /// Invalid side length or insufficient packed matrix storage.
     InvalidMatrix = 1,
+    /// Scratch is shorter than [`SCRATCH_BYTES`].
     ScratchTooSmall = 2,
+    /// Format BCH information is uncorrectable or ambiguous.
     Format = 3,
+    /// Version BCH information is invalid, ambiguous, or inconsistent with the side.
     Version = 4,
+    /// A codeword block could not be corrected within the supported limit.
     ReedSolomon = 5,
+    /// The payload ends before required bits are available.
     Truncated = 6,
+    /// A mode indicator is not supported.
     UnsupportedMode = 7,
+    /// Invalid data values, version, length, or control segment order.
     MalformedPayload = 8,
+    /// The payload output buffer cannot hold the decoded bytes.
     OutputTooSmall = 9,
+    /// The segment output buffer cannot hold all data and control segments.
     SegmentsTooSmall = 10,
 }
+/// QR error-correction level, in increasing redundancy order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum EcLevel {
+    /// Low redundancy.
     L = 0,
+    /// Medium redundancy.
     M = 1,
+    /// Quartile redundancy.
     Q = 2,
+    /// High redundancy.
     H = 3,
 }
+/// Supported QR mode indicators; numeric discriminants match the bitstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Mode {
+    /// Decimal digits, emitted as ASCII bytes.
     Numeric = 1,
+    /// QR alphanumeric characters, with FNC1 percent processing when enabled.
     Alphanumeric = 2,
+    /// Structured Append header; emits no payload bytes.
     StructuredAppend = 3,
+    /// Unmodified bytes; no ECI transformation is applied.
     Byte = 4,
+    /// FNC1 first-position header; emits no payload bytes.
     Fnc1First = 5,
+    /// ECI assignment control; emits no payload bytes.
     Eci = 7,
+    /// QR Kanji values, emitted as two-byte Shift_JIS sequences.
     Kanji = 8,
+    /// FNC1 second-position header with an application indicator; emits no bytes.
     Fnc1Second = 9,
 }
+/// One data or control segment, in original bitstream order.
+///
+/// Control segments have zero length. Empty data segments are retained as well.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct Segment {
+    /// Segment mode indicator.
     pub mode: Mode,
+    /// Start of this segment in the caller's payload output.
     pub offset: usize,
+    /// Number of emitted payload bytes, after any FNC1 processing.
     pub len: usize,
     /// Last ECI assignment encountered, initially 3; not the set of active ECIs.
     /// All ECI controls retain their order and number in the segment list.
@@ -65,6 +125,7 @@ pub struct Segment {
     pub eci: u32,
 }
 impl Segment {
+    /// Placeholder for initializing caller-owned segment storage; not a terminator.
     pub const EMPTY: Self = Self {
         mode: Mode::Byte,
         offset: 0,
@@ -72,38 +133,66 @@ impl Segment {
         eci: 3,
     };
 }
+/// Header for one symbol in a Structured Append sequence.
+///
+/// Symbol reassembly and parity verification belong to the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StructuredAppend {
+    /// Zero-based symbol index; always less than [`Self::total`].
     pub index: u8,
+    /// Number of symbols in the sequence (1..=16).
     pub total: u8,
+    /// Original parity byte from the header.
     pub parity: u8,
 }
+/// FNC1 header metadata; no transmission-layer prefix is synthesized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fnc1 {
+    /// No FNC1 header.
     None,
+    /// FNC1 in first position.
     First,
+    /// FNC1 in second position, with its raw application indicator.
+    /// Accepted values are 0..=99, 165..=190, and 197..=222.
     Second(u8),
 }
+/// Metadata for a successfully decoded matrix.
+///
+/// Read only `output[..payload_len]` and `segments[..segment_count]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Decoded {
+    /// QR Model 2 version (1..=40).
     pub version: u8,
+    /// Decoded error-correction level.
     pub ec_level: EcLevel,
+    /// Decoded mask pattern (0..=7).
     pub mask: u8,
+    /// Valid byte count in the caller's payload buffer.
     pub payload_len: usize,
+    /// Valid segment count, including control and empty data segments.
     pub segment_count: usize,
+    /// Total corrected codewords across all Reed–Solomon blocks.
     pub corrected_codewords: u16,
+    /// Minimum Hamming distance of the selected format BCH candidate (0..=3).
     pub format_distance: u8,
+    /// Minimum Hamming distance of the selected version BCH candidate; 0 for V1–6.
     pub version_distance: u8,
+    /// FNC1 header metadata, if present.
     pub fnc1: Fnc1,
+    /// Structured Append header, if present; symbols are not joined.
     pub structured_append: Option<StructuredAppend>,
 }
 
 /// Metadata from parsing corrected data codewords, without matrix or ECC information.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PayloadInfo {
+    /// Valid byte count in the caller's payload buffer.
     pub payload_len: usize,
+    /// Valid segment count, including control and empty data segments.
     pub segment_count: usize,
+    /// FNC1 header metadata, if present.
     pub fnc1: Fnc1,
+    /// Structured Append header, if present; symbols are not joined.
     pub structured_append: Option<StructuredAppend>,
 }
 
@@ -114,6 +203,12 @@ pub struct Matrix<'a> {
     side: usize,
 }
 impl<'a> Matrix<'a> {
+    /// Borrows packed module bits after checking side length and minimum storage.
+    ///
+    /// `side` must equal `17 + 4 * version` for a version in 1..=40. Bits are
+    /// row-major and MSB first, with no row padding. Extra bytes and unused final
+    /// bits are ignored. Exclude the quiet-zone border from the matrix.
+    /// This checks storage geometry, not QR content.
     pub fn new(bits: &'a [u8], side: usize) -> Result<Self, Error> {
         if !(21..=MAX_SIDE).contains(&side)
             || (side - 17) % 4 != 0
@@ -123,13 +218,16 @@ impl<'a> Matrix<'a> {
         }
         Ok(Self { bits, side })
     }
+    /// Returns the side length in modules.
     pub fn side(self) -> usize {
         self.side
     }
+    /// Returns the version implied by the validated side length.
     pub fn version(self) -> u8 {
         ((self.side - 17) / 4) as u8
     }
-    /// Returns `None` outside the matrix.
+    /// Returns whether module `(x, y)` is dark, or `None` outside the matrix.
+    /// Coordinates start at the top-left module and increase rightward/downward.
     pub fn get(self, x: usize, y: usize) -> Option<bool> {
         if x >= self.side || y >= self.side {
             None
@@ -171,6 +269,39 @@ fn capacity_error(error: Error) -> bool {
 /// Decodes one sampled matrix, retrying its transpose after a content error.
 /// Normal orientation takes priority; capacity errors are returned immediately.
 /// Input is borrowed unchanged and both orientations reuse the same scratch.
+/// The input orientation must place finders at the top-left, top-right, and
+/// bottom-left; this function does not search arbitrary rotations.
+///
+/// Supply at least [`SCRATCH_BYTES`] scratch bytes. Payload and segment buffers
+/// may be smaller than [`MAX_PAYLOAD_BYTES`] and [`MAX_SEGMENTS`], respectively;
+/// insufficient capacity returns an error. On success, read only the prefixes
+/// specified by [`Decoded`]; on error, all writable buffer contents are unspecified.
+/// If both orientations fail with content errors, the normal-orientation error wins.
+/// Reed–Solomon correction reserves the recommended parity margin: V1-L corrects
+/// at most two codewords per block; V1-M and V2-L correct at most four.
+/// Damage beyond the correction limit is not guaranteed to be detected.
+///
+/// ```
+/// use qr_core::{decode, Matrix, Segment, SCRATCH_BYTES};
+/// // Packed V1-H, mask 3, encoding the raw bytes "TEST".
+/// let bits = [
+///     0xfe, 0x23, 0xfc, 0x11, 0x50, 0x6e, 0x8e, 0xbb,
+///     0x74, 0x15, 0xdb, 0xab, 0xae, 0xc1, 0x01, 0x07,
+///     0xfa, 0xaf, 0xe0, 0x18, 0x00, 0x33, 0xb6, 0x84,
+///     0x4b, 0x8b, 0x1b, 0xc2, 0x66, 0xd8, 0xdc, 0xa0,
+///     0x28, 0xcf, 0x00, 0x51, 0xaf, 0xfb, 0xdb, 0x90,
+///     0x4c, 0x4c, 0xba, 0x52, 0x1d, 0xd7, 0x46, 0xae,
+///     0xbd, 0x29, 0x04, 0x69, 0x9f, 0xe6, 0x30, 0x00,
+/// ];
+/// let mut scratch = [0; SCRATCH_BYTES];
+/// let mut payload = [0; 4];
+/// let mut segments = [Segment::EMPTY; 1];
+/// let decoded = decode(Matrix::new(&bits, 21)?, &mut scratch,
+///     &mut payload, &mut segments)?;
+/// assert_eq!(&payload[..decoded.payload_len], b"TEST");
+/// assert_eq!(decoded.segment_count, 1);
+/// # Ok::<(), qr_core::Error>(())
+/// ```
 pub fn decode(
     matrix: Matrix<'_>,
     scratch: &mut [u8],
@@ -344,6 +475,7 @@ pub fn parse_payload_info(
     payload::parse(data, version, output, segments)
 }
 
+/// Returns combined data and ECC codewords for `version`, or 0 outside 1..=40.
 pub fn raw_codewords(version: u8) -> usize {
     if !(1..=40).contains(&version) {
         return 0;
@@ -378,6 +510,7 @@ pub fn alignment_positions(version: u8, positions: &mut [u8; 7]) -> usize {
     count
 }
 /// True for finder/separator/timing/format/version/alignment/dark function modules.
+/// Also returns true for invalid versions or coordinates outside the symbol.
 pub fn is_function(version: u8, x: usize, y: usize) -> bool {
     if !(1..=40).contains(&version) {
         return true;

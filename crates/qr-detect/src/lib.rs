@@ -1,21 +1,47 @@
 //! Bounded Gray8 detector. No frame-sized binary image, allocation, or copied input.
 //! Global midrange and local sampled-mean thresholds, each in normal/inverted polarity.
+//!
+//! [`GrayImage`] borrows a rectangular ROI, including a parent frame's row stride.
+//! [`Config`] sets independent image maxima and finder/candidate/sampling budgets.
+//! [`decode`] returns the first decoded symbol. [`decode_with_stats`] also exposes
+//! counters after failure. No call enumerates every symbol in an image.
+//!
+//! ```
+//! use qr_detect::{Config, GrayImage};
+//! let pixels = [255; 8];
+//! let roi = GrayImage::new(&pixels, 2, 2, 6)?;
+//! assert_eq!(roi.pixel(1, 1), Some(255));
+//! let config = Config::<640, 240>::default();
+//! assert_eq!(config.scratch_bytes()?, 4557);
+//! # Ok::<(), qr_detect::Error>(())
+//! ```
 #![no_std]
 #![forbid(unsafe_code)]
 use qr_core::{Decoded, Matrix, Segment, MAX_MATRIX_BYTES};
 
+/// Required detector scratch alignment, in bytes (1).
 pub const SCRATCH_ALIGN: usize = 1;
 const FINDER_BYTES: usize = 20;
+/// Image validation, bounded search, or matrix decoding failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    /// Zero dimensions, insufficient pixels, invalid stride, or size arithmetic overflow.
     InvalidImage,
+    /// The ROI exceeds the configured compile-time dimensions.
     ImageTooLarge,
+    /// An image maximum or runtime setting is outside its allowed range.
     InvalidConfig,
+    /// Detector scratch is shorter than [`Config::scratch_bytes`].
     ScratchTooSmall,
+    /// Finder observations were discarded for lack of capacity and no symbol decoded.
     FinderCapacity,
+    /// The shared finder-triple budget was exhausted.
     CandidateBudget,
+    /// The shared matrix-sampling budget was exhausted.
     RetryBudget,
+    /// No symbol decoded and no more specific failure was retained.
     NotFound,
+    /// Core validation, capacity, or decoding failure.
     Decode(qr_core::Error),
 }
 /// Borrowed ROI. `data` begins at the first pixel of the ROI, not the parent frame.
@@ -27,6 +53,13 @@ pub struct GrayImage<'a> {
     stride: usize,
 }
 impl<'a> GrayImage<'a> {
+    /// Validates a borrowed Gray8 ROI without copying pixels.
+    ///
+    /// Width and height must be nonzero, stride must be at least width, and data
+    /// must contain `(height - 1) * stride + width` bytes. Arithmetic overflow is
+    /// rejected. Padding after the last row is unnecessary. `data[0]` must be the
+    /// ROI's top-left pixel; retain the parent frame stride when selecting a ROI.
+    /// Pixel values range from 0 (black) to 255 (white).
     pub fn new(data: &'a [u8], width: usize, height: usize, stride: usize) -> Result<Self, Error> {
         if width == 0 || height == 0 || stride < width {
             return Err(Error::InvalidImage);
@@ -45,15 +78,19 @@ impl<'a> GrayImage<'a> {
             stride,
         })
     }
+    /// Returns the ROI width in pixels.
     pub fn width(self) -> usize {
         self.width
     }
+    /// Returns the ROI height in pixels.
     pub fn height(self) -> usize {
         self.height
     }
+    /// Returns the byte distance between row starts.
     pub fn stride(self) -> usize {
         self.stride
     }
+    /// Returns a pixel at ROI-relative `(x, y)`, or `None` outside the ROI.
     pub fn pixel(self, x: usize, y: usize) -> Option<u8> {
         if x < self.width && y < self.height {
             Some(self.at(x, y))
@@ -66,16 +103,24 @@ impl<'a> GrayImage<'a> {
     }
 }
 /// Image maxima are independent const parameters. Changing them does not change scratch size.
+///
+/// Both maxima must be in 1..=32768. Defaults are 640 by 640 pixels, 32 finder
+/// records, 4096 candidates, 256 sampling attempts, row step 1, and local radius 24.
+/// Settings are validated by [`Self::scratch_bytes`] and the decode entry points.
 #[derive(Clone, Copy, Debug)]
 pub struct Config<const MAX_WIDTH: usize = 640, const MAX_HEIGHT: usize = 640> {
+    /// Finder-record capacity per pass (3..=128); default 32.
     pub max_finders: usize,
-    /// Total triples examined across all threshold/polarity passes.
+    /// Total triples examined across all threshold/polarity passes (1..=1_000_000).
+    /// Default 4096; geometric rejection still consumes a candidate.
     pub max_candidates: usize,
-    /// Total sampled matrices (including rejected geometric samples) across all passes.
+    /// Total matrix-sampling attempts across all passes (1..=65536); default 256.
+    /// Includes samples rejected geometrically. Core transpose retries do not count.
     pub max_retries: usize,
-    /// Row scan increment. One preserves the best small-symbol recall.
+    /// Row scan increment in pixels (1..=MAX_HEIGHT); default 1.
+    /// One preserves the best small-symbol recall.
     pub row_step: usize,
-    /// Half-width of the sampled local-threshold window, in pixels (4..=128).
+    /// Half-width of the sampled local-threshold window in pixels (4..=128); default 24.
     pub local_radius: usize,
 }
 impl<const W: usize, const H: usize> Default for Config<W, H> {
@@ -90,8 +135,14 @@ impl<const W: usize, const H: usize> Default for Config<W, H> {
     }
 }
 impl<const W: usize, const H: usize> Config<W, H> {
+    /// Compile-time maximum ROI width, in pixels.
     pub const MAX_WIDTH: usize = W;
+    /// Compile-time maximum ROI height, in pixels.
     pub const MAX_HEIGHT: usize = H;
+    /// Returns `qr_core::MAX_MATRIX_BYTES + 20 * max_finders` after validation.
+    ///
+    /// Returns [`Error::InvalidConfig`] for any invalid setting or image maximum.
+    /// The returned allocation is byte-aligned and may be reused between calls.
     pub fn scratch_bytes(&self) -> Result<usize, Error> {
         self.validate()?;
         Ok(MAX_MATRIX_BYTES + self.max_finders * FINDER_BYTES)
@@ -116,11 +167,15 @@ impl<const W: usize, const H: usize> Config<W, H> {
         }
     }
 }
+/// Configuration with independent 640-pixel width and height maxima.
 pub type DefaultConfig = Config<640, 640>;
+/// ROI-relative image coordinate, with x rightward and y downward.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)]
 pub struct Point {
+    /// Horizontal coordinate in pixels.
     pub x: f32,
+    /// Vertical coordinate in pixels.
     pub y: f32,
 }
 impl Point {
@@ -152,20 +207,40 @@ impl Point {
         self.x * p.y - self.y * p.x
     }
 }
+/// Work counters accumulated across the complete decode call.
+///
+/// Early validation failures and images with global contrast below 8 leave all
+/// counters at zero. Counters do not include the initial min/max pixel scan.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
+    /// Rows visited by finder scanning, summed across passes.
     pub rows: usize,
+    /// Run-ratio observations passing both cross-checks, before 7×7 pattern validation.
     pub finder_observations: usize,
+    /// Finder triples examined, including those rejected before sampling.
     pub candidates: usize,
+    /// Matrix-sampling attempts, including geometrically rejected samples.
+    /// A core transpose retry reuses one sample and does not increment this count.
     pub retries: usize,
+    /// Threshold/polarity passes entered (0..=4).
     pub passes: usize,
 }
+/// First successfully decoded symbol and the sampling geometry used to find it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Detection {
+    /// Decoded payload metadata; only its output prefixes are valid.
     pub decoded: Decoded,
+    /// ROI-relative projections of grid boundaries `(0,0)`, `(side,0)`,
+    /// `(side,side)`, and `(0,side)`, in sampling order.
+    /// Core transpose decoding leaves this order unchanged; for a mirrored symbol,
+    /// logical top-right and bottom-left correspond to indices 3 and 1.
+    /// There is no mirrored flag in the result.
     pub corners: [Point; 4],
+    /// Whether the successful threshold pass used inverted polarity.
     pub inverted: bool,
+    /// Whether the successful pass used local sampled-mean thresholds.
     pub local_threshold: bool,
+    /// Counters at the point of successful decoding.
     pub stats: Stats,
 }
 #[derive(Clone, Copy, Default)]
@@ -441,7 +516,17 @@ fn scan(
     (count, overflow)
 }
 /// Decodes at most one symbol, using deterministic threshold/polarity/triple/version priority.
-/// All budgets are shared across the complete call. See `docs/detection.md` for the search envelope.
+/// All budgets are shared across the complete call. Thresholds are tried in order:
+/// global normal, global inverted, local normal, local inverted.
+///
+/// Supply detector scratch from [`Config::scratch_bytes`] and core scratch of at
+/// least [`qr_core::SCRATCH_BYTES`] bytes. All writable storage belongs to the caller
+/// and can be reused. On success, read only the payload and segment prefixes named
+/// by [`Detection::decoded`]; on failure, writable buffer contents are unspecified.
+/// Use [`decode_with_stats`] when failure counters are needed.
+///
+/// Rotation, perspective, uneven lighting, and mirrors are supported by bounded
+/// heuristics; recognition under arbitrary distortion is not guaranteed.
 pub fn decode<const W: usize, const H: usize>(
     image: GrayImage<'_>,
     config: &Config<W, H>,
@@ -460,7 +545,10 @@ pub fn decode<const W: usize, const H: usize>(
         &mut Stats::default(),
     )
 }
-/// Like `decode`, retaining work counters on both success and failure.
+/// Like [`decode`], retaining work counters on both success and failure.
+///
+/// Resets `stats` before validation. On success, it equals [`Detection::stats`].
+/// On error, payload, segment, and scratch contents remain unspecified.
 #[allow(clippy::too_many_arguments)]
 pub fn decode_with_stats<const W: usize, const H: usize>(
     image: GrayImage<'_>,

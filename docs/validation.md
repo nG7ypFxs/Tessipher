@@ -103,7 +103,8 @@ release設定は `panic=abort`、LTO有効、codegen-units=1です。
 
 設定はfinder32、candidate4096、retry256、row_step1、local_radius24です。
 現在のscratchはcore7077+detector4557=11634bytes、alignment1です。
-上のベンチ測定は二方向pitch保存、鏡像再試行、RS推奨p採用の修正前であり、修正後の時間測定は未実施です。
+上の表は二方向pitch保存、鏡像再試行、RS推奨p採用の修正前の履歴です。
+その後の変更を含む測定は末尾の「内部整理後の性能比較」に記録しています。
 検出の失敗時にも `decode_with_stats` で予算消費を確認できます。
 MCU実測値、実画像の認識率、flash/RAM配置後のスタック上限、規格適合認証は未取得です。
 
@@ -217,3 +218,69 @@ Micro QR、Model 1、rMQR、送信層、SA結合、セグメント間FNC1 escape
 通常方向が内容エラーになる場合のcore処理は最大2回になります。
 サンプリングのStats.retriesとmax_retriesは増やさず、scratchも増やしていませんが、CPU時間への影響は未測定です。
 この修正後の性能保証として以前のベンチマーク値を使用しません。
+
+
+## 幾何キャッシュと探索状態の整理
+
+2026-10-07、行列復号の各moduleで再計算していたalignment中心を、呼出しごとの固定長geometryにまとめました。
+通常方向と転置方向で同じgeometryを使い、alignmentの判定は中心の全組合せ探索から、xとyの帯を個別に調べる探索へ変更しています。
+中心数をkとすると各moduleの判定はO(k²)からO(k)になります。
+全V1–40の全座標を変更前のpairwise判定と比較し、data module数と `raw_codewords` の整合、V32の特殊間隔、範囲外座標と不正versionの扱いを確認しました。
+
+検出では `SearchContext` に作業領域、出力、Stats、予算、最後の復号エラーを集約し、三点候補、version候補、射影のsamplingを別のメソッドに整理しました。
+探索順と浮動小数点の式を維持し、画像面積に比例する領域を追加していません。
+失敗時Stats、pass間のcandidateとretry予算共有、幾何的にsamplingを破棄した場合のretry計上、容量エラーでの即時停止、FinderCapacityの最終優先順位を回帰テストで固定しました。
+Statsの期待値は変更前のHEADでも照合しています。
+強射影V1はcandidate1/retry3/pass1、local閾値が必要な画像はcandidate1/retry1/pass3のままです。
+
+訂正済みdata codewordには名前付き結果 `PayloadInfo` を返す `parse_payload_info` を追加しました。
+既存のtuple APIは新入口へ委譲し、内部の解析結果も同じ型を使います。
+合法な制御セグメントの混在と不正な制御順序を含む既存テストで両入口を比較し、空入力、data長の上限、versionの長さ区分、容量不足、不正version、truncatedの境界も確認しました。
+
+| コマンド | 結果 |
+| --- | --- |
+| `cargo test --workspace --locked` | 単体と統合37件、APIのdoc test1件成功 |
+| `cargo test --workspace --locked --release` | 同じ全テスト成功、allocator監視で動的確保0回 |
+| `cargo fmt --all -- --check` | 成功 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | 成功 |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | 成功 |
+| `cargo +1.85 check -p qr-core -p qr-detect -p qr --lib --locked --offline` | Rust1.85.1で成功 |
+| `cargo build -p qr-core -p qr-detect --target thumbv6m-none-eabi --release --locked --offline` | 成功 |
+| `cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release --locked --offline` | 成功 |
+| `cargo check -p qr --target wasm32-unknown-unknown --locked --offline` | 成功 |
+| `cargo build -p qr-ffi --release --locked --offline` | 成功 |
+| `python3 tools/check_header.py` / `python3 tools/c_smoke.py` | header一致、C ABI成功、core7077/detector4557/alignment1 |
+| `python3 tools/check_symbols.py` | Cortex archiveにheapとunwind runtimeのimportなし |
+| `cargo run -p qr --example fuzz_smoke --release --locked` | payload20,000/matrix10,000/image200件、panicなし、0.156秒 |
+
+通常と転置の2560行列、Segnoの24行列、最大payload、RSとBCH、回転、鏡像、非等方pitch、射影、照明、strideの既存検査も成功しています。
+公開の既存Rust APIとC ABI、scratch量、alignment、新規依存なしという条件を維持しています。
+MCUの実測スタック上限と実画像の認識率は引き続き未測定です。
+
+## 内部整理後の性能比較
+
+`bench` にV32とV40のmatrix測定を追加し、変更前にも同じbenchソースを渡しました。
+比較した3構成は変更前、coreだけ変更、coreとdetectorを変更した最終構成です。
+同じ一時ディレクトリで同じcompilerとrelease設定を使って順次ビルドし、各実行バイナリを保存しました。
+以降はビルドを挟まず、構成の実行順を変えて3巡測定しました。
+各巡は各ケース15回で、表は3巡の中央値の中央値です。
+ホスト、profile、画像、設定は前掲と同じです。
+
+| ケース | 変更前μs | coreのみ変更μs | 最終構成μs |
+| --- | ---: | ---: | ---: |
+| matrix V7-H mask3 | 54.92 | 31.42 | 32.83 |
+| matrix V32 | 783.88 | 471.83 | 472.62 |
+| matrix V40 | 1564.42 | 721.00 | 707.88 |
+| 通常QR | 1341.21 | 1395.12 | 1303.88 |
+| QRなし白画像 | 8.12 | 8.62 | 8.12 |
+| 一様乱数ノイズ | 6555.04 | 6797.71 | 6502.67 |
+| 復号不能QR | 32525.88 | 31964.54 | 32074.79 |
+
+全9実行のdetectorの結果とStatsは一致しました。
+通常はcandidate1/retry1/pass1、白画像はNotFoundで全counter0、ノイズはCandidateBudgetでcandidate4096/retry0/pass1、復号不能QRはDecode(Version)でcandidate2/retry60/pass4です。
+
+プロセス間の時間変動は大きく、通常QRの巡ごとの中央値は変更前1340.83–1410.83μs、coreのみ1318.79–1731.00μs、最終構成1300.33–1829.25μsでした。
+ビルド直後の1巡目ではcoreだけの変更でも悪化し、最終構成の2巡目と3巡目は変更前より短い値になりました。
+別ディレクトリで行った先の3組の交互比較では、通常QRに約17%の悪化も観測しています。
+これらからdetectorの恒常的な速度改善や悪化は断定せず、matrixの探索量削減とホストでの観測値を区別します。
+この測定はWCET、全入力の性能、MCUの速度を保証するものではありません。

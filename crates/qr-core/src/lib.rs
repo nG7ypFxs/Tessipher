@@ -8,8 +8,9 @@
 //! [`parse_payload_info`] for data codewords already corrected by another demodulator.
 //! Byte segments remain raw bytes; Kanji segments produce two-byte Shift_JIS values.
 //! ECI assignments are recorded without applying charset, encryption, or compression
-//! transformations. FNC1 percent escapes are processed within each Alphanumeric
-//! segment. Structured Append metadata is returned without joining symbols.
+//! transformations. FNC1 percent escapes continue across Alphanumeric segment
+//! boundaries and ECI headers; other data modes end the escape sequence.
+//! Structured Append metadata is returned without joining symbols.
 //!
 //! ```
 //! use qr_core::{Matrix, MAX_MATRIX_BYTES};
@@ -110,6 +111,8 @@ pub enum Mode {
 /// One data or control segment, in original bitstream order.
 ///
 /// Control segments have zero length. Empty data segments are retained as well.
+/// An FNC1 percent pair spanning Alphanumeric segments belongs to the segment
+/// containing its first percent; the second percent emits no additional byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct Segment {
@@ -118,6 +121,7 @@ pub struct Segment {
     /// Start of this segment in the caller's payload output.
     pub offset: usize,
     /// Number of emitted payload bytes, after any FNC1 processing.
+    /// May be zero for a nonempty Alphanumeric segment completing an FNC1 pair.
     pub len: usize,
     /// Last ECI assignment encountered, initially 3; not the set of active ECIs.
     /// All ECI controls retain their order and number in the segment list.

@@ -19,7 +19,9 @@ The decoder implements format/version BCH decoding, function-module exclusion, u
 It parses Numeric, Alphanumeric, Byte, Kanji, ECI, FNC1 first and second position, and Structured Append modes.
 Byte mode produces raw bytes; Kanji mode produces two-byte Shift_JIS sequences without character-set conversion.
 Each segment records its mode, output range, and the most recently encountered ECI number (initially 3).
-FNC1 percent processing applies to Alphanumeric segments.
+FNC1 percent processing continues across Alphanumeric segment boundaries and ECI headers.
+Numeric, Byte, and Kanji modes end the escape sequence, even when empty; Byte value 0x25 remains raw.
+A percent pair spanning segments emits one byte belonging to the segment containing its first percent.
 Structured Append returns index/total/parity metadata; joining symbols is the caller's responsibility.
 
 Gray8 input is a borrowed rectangular view.

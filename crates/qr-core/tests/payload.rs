@@ -17,6 +17,27 @@ impl Bits {
         }
         out
     }
+    fn fnc(self, second: bool) -> Self {
+        if second {
+            self.add(9, 4).add(42, 8)
+        } else {
+            self.add(5, 4)
+        }
+    }
+    fn alphanumeric(mut self, text: &[u8]) -> Self {
+        const ALPHA: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+        self = self.add(2, 4).add(text.len() as u32, 9);
+        for pair in text.chunks(2) {
+            let first = ALPHA.iter().position(|&ch| ch == pair[0]).unwrap() as u32;
+            self = if pair.len() == 2 {
+                let second = ALPHA.iter().position(|&ch| ch == pair[1]).unwrap() as u32;
+                self.add(first * 45 + second, 11)
+            } else {
+                self.add(first, 6)
+            };
+        }
+        self
+    }
 }
 type Parsed = (Vec<u8>, Vec<Segment>, Fnc1, Option<StructuredAppend>);
 fn parse(b: Bits) -> Result<Parsed, Error> {
@@ -178,6 +199,195 @@ fn fnc_first_percent_only_in_alphanumeric() {
     assert_eq!(f, Fnc1::First);
     assert_eq!(out, b"%\x1d%");
     assert_eq!(s[1].len, 2);
+}
+#[test]
+fn fnc_percent_conversion_is_independent_of_alphanumeric_splits() {
+    for second in [false, true] {
+        for (text, expected) in [
+            (b"%".as_slice(), b"\x1d".as_slice()),
+            (b"%%", b"%"),
+            (b"%%%", b"%\x1d"),
+            (b"%%%%", b"%%"),
+            (b"A%%%B%%C%D", b"A%\x1dB%C\x1dD"),
+        ] {
+            // Every possible partition of the same Alphanumeric characters.
+            for boundaries in 0..(1 << text.len().saturating_sub(1)) {
+                let mut bits = Bits::default().fnc(second);
+                let mut start = 0;
+                for end in 1..=text.len() {
+                    if end == text.len() || boundaries & (1 << (end - 1)) != 0 {
+                        bits = bits.alphanumeric(&text[start..end]);
+                        start = end;
+                    }
+                }
+                let (out, segments, fnc, _) = parse(bits.add(0, 4)).unwrap();
+                assert_eq!(out, expected, "{text:?}, split {boundaries}");
+                assert_eq!(
+                    fnc,
+                    if second {
+                        Fnc1::Second(42)
+                    } else {
+                        Fnc1::First
+                    }
+                );
+                let mut offset = 0;
+                for segment in segments {
+                    assert_eq!(segment.offset, offset);
+                    offset += segment.len;
+                }
+                assert_eq!(offset, expected.len());
+            }
+        }
+    }
+    // Without FNC1 each percent remains a distinct byte.
+    assert_eq!(
+        parse(Bits::default().alphanumeric(b"%").alphanumeric(b"%"))
+            .unwrap()
+            .0,
+        b"%%"
+    );
+}
+#[test]
+fn fnc_pair_ownership_survives_eci_and_empty_alphanumeric() {
+    for second in [false, true] {
+        let (out, segments, _, _) = parse(
+            Bits::default()
+                .fnc(second)
+                .alphanumeric(b"%")
+                .add(7, 4)
+                .add(26, 8)
+                .alphanumeric(b"")
+                .add(7, 4)
+                .add(0x812c, 16)
+                .alphanumeric(b"%A")
+                .alphanumeric(b"%")
+                .alphanumeric(b"%")
+                .add(0, 4),
+        )
+        .unwrap();
+        assert_eq!(out, b"%A%");
+        assert_eq!(
+            segments
+                .iter()
+                .map(|s| (s.mode, s.offset, s.len, s.eci))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    if second {
+                        Mode::Fnc1Second
+                    } else {
+                        Mode::Fnc1First
+                    },
+                    0,
+                    0,
+                    3
+                ),
+                (Mode::Alphanumeric, 0, 1, 3),
+                (Mode::Eci, 1, 0, 26),
+                (Mode::Alphanumeric, 1, 0, 26),
+                (Mode::Eci, 1, 0, 300),
+                (Mode::Alphanumeric, 1, 1, 300),
+                (Mode::Alphanumeric, 2, 1, 300),
+                (Mode::Alphanumeric, 3, 0, 300),
+            ]
+        );
+    }
+}
+#[test]
+fn fnc_different_data_modes_end_percent_pairs_even_when_empty() {
+    for second in [false, true] {
+        for (mode, width, value, data_width, middle) in [
+            (1, 10, 7, 4, b"7".as_slice()),
+            (4, 8, 37, 8, b"%".as_slice()),
+            (8, 8, 1855, 13, b"\x8a\xbf".as_slice()),
+        ] {
+            for count in [0, 1] {
+                let mut bits = Bits::default()
+                    .fnc(second)
+                    .alphanumeric(b"%")
+                    .add(mode, 4)
+                    .add(count, width);
+                if count == 1 {
+                    bits = bits.add(value, data_width);
+                }
+                let (out, segments, _, _) = parse(bits.alphanumeric(b"%").add(0, 4)).unwrap();
+                let mut expected = vec![29];
+                if count == 1 {
+                    expected.extend_from_slice(middle);
+                }
+                expected.push(29);
+                assert_eq!(out, expected);
+                assert_eq!((segments[1].offset, segments[1].len), (0, 1));
+                assert_eq!(
+                    (segments[2].offset, segments[2].len),
+                    (1, expected.len() - 2)
+                );
+                assert_eq!(
+                    (segments[3].offset, segments[3].len),
+                    (expected.len() - 1, 1)
+                );
+            }
+        }
+    }
+}
+#[test]
+fn fnc_percent_termination_and_capacity_boundaries() {
+    for second in [false, true] {
+        for bits in [
+            Bits::default().fnc(second).alphanumeric(b"%").add(0, 4),
+            // One zero bit remains in the final byte (short terminator).
+            Bits::default().fnc(second).alphanumeric(b"%"),
+            // Exactly 48 / 56 bits, with a final unpaired percent.
+            Bits::default()
+                .fnc(second)
+                .add(1, 4)
+                .add(0, 10)
+                .alphanumeric(b"%%%"),
+        ] {
+            let (out, _, _, _) = parse(bits).unwrap();
+            assert_eq!(*out.last().unwrap(), 29);
+        }
+        assert_eq!(
+            parse(Bits::default().fnc(second).alphanumeric(b"%").add(1, 1)),
+            Err(Error::Truncated)
+        );
+        let data = Bits::default()
+            .fnc(second)
+            .alphanumeric(b"%")
+            .alphanumeric(b"%")
+            .add(0, 4)
+            .bytes();
+        let mut out = [0; 1];
+        let mut segments = [Segment::EMPTY; 3];
+        let info = parse_payload_info(&data, 1, &mut out, &mut segments).unwrap();
+        assert_eq!((info.payload_len, info.segment_count), (1, 3));
+        assert_eq!(out, [b'%']);
+        assert_eq!((segments[1].offset, segments[1].len), (0, 1));
+        assert_eq!((segments[2].offset, segments[2].len), (1, 0));
+        assert_eq!(
+            parse_payload_info(&data, 1, &mut [], &mut segments),
+            Err(Error::OutputTooSmall)
+        );
+        assert_eq!(
+            parse_payload_info(&data, 1, &mut out, &mut segments[..2]),
+            Err(Error::SegmentsTooSmall)
+        );
+        for bits in [
+            Bits::default()
+                .fnc(second)
+                .alphanumeric(b"%")
+                .add(7, 4)
+                .add(0x80, 8),
+            Bits::default()
+                .fnc(second)
+                .alphanumeric(b"%")
+                .add(2, 4)
+                .add(1, 9),
+            Bits::default().fnc(second).add(2, 4),
+        ] {
+            assert_eq!(parse(bits), Err(Error::Truncated));
+        }
+    }
 }
 #[test]
 fn exact_capacities_and_short_terminator() {

@@ -63,7 +63,12 @@ Every ECI control segment is retained in order with its assignment number, allow
 No character-set, encryption, or compression transformation is applied; Byte data remains raw bytes.
 Kanji output is Shift_JIS regardless of ECI.
 
-For FNC1 first and second position, a single `%` within an Alphanumeric segment becomes GS (0x1D), and `%%` becomes a literal `%`.
+For FNC1 first and second position, a single Alphanumeric `%` becomes GS (0x1D), and `%%` becomes a literal `%`.
+Pairing continues across Alphanumeric segment boundaries, empty Alphanumeric segments, and intervening ECI headers.
+Numeric, Byte, and Kanji modes end the pairing sequence, including zero-length segments.
+A pair's output byte belongs to the segment containing its first percent; the second percent emits no additional byte.
+Consequently, a nonempty Alphanumeric segment containing only the second percent can have `len == 0`.
+For example, Alphanumeric `%` → ECI26 → Alphanumeric `%A` produces `%A`: the first data segment has `(offset, len, eci) = (0, 1, 3)`, the ECI has `(1, 0, 26)`, and the last data segment has `(1, 1, 26)`.
 Byte value 0x25 is unchanged.
 The second-position eight-bit application indicator accepts 0–99, 165–190, and 197–222 and returns the original value.
 Other values return `MalformedPayload`.

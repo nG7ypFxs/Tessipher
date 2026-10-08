@@ -283,3 +283,44 @@ The first round immediately after building worsened even with core-only changes;
 An earlier set of three alternating comparisons in another directory also observed roughly 17% degradation for normal QR.
 These results do not establish a consistent detector speedup or slowdown; the matrix search-work reduction is distinguished from observed host timings.
 The measurements guarantee neither WCET nor performance for all input or on an MCU.
+
+## FNC1 Alphanumeric segment-boundary correction — 2026-10-08
+
+The cross-segment FNC1 question recorded as unresolved in the earlier standards review is now resolved for the existing Model 2 raw-payload API.
+JIS X 0510:2026, 7.4.1 applies FNC1 to the whole symbol, and 7.4.2 describes data segments without an explicit separator; 14.4 describes transmission of `%%` as one percent.
+The decoder now interprets an Alphanumeric percent pair identically whether its two characters occupy one segment or separate Alphanumeric segments.
+This applies to first- and second-position FNC1, including intervening ECI headers and empty Alphanumeric segments.
+Numeric, Byte, and Kanji modes end the pairing sequence even when empty; Byte 0x25 remains unchanged.
+An unpaired percent emits GS (0x1D), a pair emits `%`, and `%%%` emits `%` followed by GS.
+
+The first percent immediately reserves its output byte as GS; a paired second percent replaces that byte with `%`.
+The byte belongs to the segment containing the first percent, preserving contiguous `Segment.offset`/`len` ranges without revising earlier metadata.
+A nonempty Alphanumeric segment completing a pair may therefore have zero output length.
+The previous segment retains its ECI number, and every intervening ECI header and the latest number on later segments remain available.
+The public Rust types, C ABI, caller-owned buffers, scratch requirements, dependencies, and no-allocation behavior are unchanged.
+
+Direct payload regression tests cover every partition of representative percent sequences, both FNC1 positions, ECI history, empty segments, all other data modes, byte ownership, terminators, exact bit exhaustion, truncated input, and insufficient output/segment capacity.
+Four independent Nayuki V1-H/mask0 matrices encode first/second FNC1 with joined `%%` or split `%` + `%` Alphanumeric segments.
+All four decode to one `%` with a one-byte output buffer, both normally and transposed, with zero corrected codewords and the expected control and segment metadata.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --workspace --locked` | Passed, including 13 payload and 11 matrix test functions |
+| `cargo test --workspace --release --locked` | Passed |
+| `cargo +1.85 test --workspace --locked` | Passed on Rust 1.85.1 |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Passed |
+| `RUSTDOCFLAGS='-D warnings -D missing_docs' cargo doc --workspace --no-deps --locked` | Passed |
+| `python3 tools/check_header.py` / `python3 tools/c_smoke.py` | Headers matched; C ABI passed; core7077/detector4557/alignment1 |
+| `python3 tools/generate_fixtures.py` | Existing fixture bytes unchanged; repeat generation matched SHA-256 for every fixture |
+| `cargo build -p qr-core --target thumbv6m-none-eabi --release --locked` | Passed |
+| `cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release --locked` | Passed |
+| `cargo check -p qr --target wasm32-unknown-unknown --locked` | Passed |
+| `cargo run -p qr --example fuzz_smoke --release` | 20,000 payload / 10,000 matrix / 200 image cases, no panics |
+
+The full test runs also passed the existing 2560 normal/transposed corpus matrices, 24 Segno matrices, image geometry/lighting/stride tests, RS/BCH tests, and no-allocation check.
+Earlier validation sections remain historical records of their respective iterations.
+No unresolved implementation defect remains from the confirmed findings in this scoped comparison.
+The chapter 12 reference decoding algorithm's BCH-copy selection and alignment-grid approach do not require replacing the existing implementation.
+Micro QR, Model 1, encoding, ECI charset/transformation application, Structured Append joining, and chapter 14 transmission formatting remain outside the library's current raw-payload scope.
+This correction does not establish certification or completeness of all standard requirements, and previously recorded real-image recognition and MCU stack measurements remain outstanding.

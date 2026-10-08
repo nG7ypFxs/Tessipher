@@ -49,6 +49,16 @@ for second in [False, True]:
         name=f'eci-fnc{2 if second else 1}{"-sa" if append else ""}'
         (ROOT/f'fixtures/{name}.bin').write_bytes(packed(q))
 
+# The same FNC1 escape as one Alphanumeric segment and as two segments.
+# Nayuki performs matrix placement and ECC independently of the decoder.
+for second in [False, True]:
+    fnc_header = control(9,ub(42,8)) if second else control(5,[])
+    for split in [False, True]:
+        data = [QrSegment.make_alphanumeric(text) for text in (['%', '%'] if split else ['%%'])]
+        q=QrCode.encode_segments([fnc_header]+data,QrCode.Ecc.HIGH,1,1,0,False)
+        name=f'fnc{2 if second else 1}-percent-{"split" if split else "joined"}'
+        (ROOT/f'fixtures/{name}.bin').write_bytes(packed(q))
+
 for name,segment in [('numeric-max',QrSegment.make_numeric('1'*7089)),('byte-max',QrSegment.make_bytes(bytes(i%256 for i in range(2953)))),('kanji-max',QrSegment(QrSegment.Mode.KANJI,1817,ub(1855,13)*1817))]:
     q=QrCode.encode_segments([segment],QrCode.Ecc.LOW,40,40,2,False)
     (ROOT/f'fixtures/{name}.bin').write_bytes(packed(q))

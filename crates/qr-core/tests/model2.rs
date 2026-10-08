@@ -421,3 +421,85 @@ fn independent_eci_before_fnc_headers() {
         }
     }
 }
+
+#[test]
+fn independent_fnc_percent_pair_across_segments_normal_and_transposed() {
+    for (bits, second, split) in [
+        (
+            include_bytes!("../../../fixtures/fnc1-percent-joined.bin").as_slice(),
+            false,
+            false,
+        ),
+        (
+            include_bytes!("../../../fixtures/fnc1-percent-split.bin").as_slice(),
+            false,
+            true,
+        ),
+        (
+            include_bytes!("../../../fixtures/fnc2-percent-joined.bin").as_slice(),
+            true,
+            false,
+        ),
+        (
+            include_bytes!("../../../fixtures/fnc2-percent-split.bin").as_slice(),
+            true,
+            true,
+        ),
+    ] {
+        let mirrored = transpose(bits, 21);
+        for matrix_bits in [bits, mirrored.as_slice()] {
+            let mut scratch = vec![0; SCRATCH_BYTES];
+            let mut out = [0; 1];
+            let mut segments = [Segment::EMPTY; 3];
+            let decoded = decode(
+                Matrix::new(matrix_bits, 21).unwrap(),
+                &mut scratch,
+                &mut out,
+                &mut segments,
+            )
+            .unwrap();
+            assert_eq!(out, [b'%']);
+            assert_eq!(
+                (decoded.version, decoded.ec_level, decoded.mask),
+                (1, EcLevel::H, 0)
+            );
+            assert_eq!(decoded.payload_len, 1);
+            assert_eq!(decoded.segment_count, if split { 3 } else { 2 });
+            assert_eq!(decoded.corrected_codewords, 0);
+            assert_eq!(
+                decoded.fnc1,
+                if second {
+                    Fnc1::Second(42)
+                } else {
+                    Fnc1::First
+                }
+            );
+            assert_eq!(decoded.structured_append, None);
+            assert_eq!(
+                (segments[0].mode, segments[0].offset, segments[0].len),
+                (
+                    if second {
+                        Mode::Fnc1Second
+                    } else {
+                        Mode::Fnc1First
+                    },
+                    0,
+                    0
+                )
+            );
+            assert_eq!(
+                (segments[1].mode, segments[1].offset, segments[1].len),
+                (Mode::Alphanumeric, 0, 1)
+            );
+            if split {
+                assert_eq!(
+                    (segments[2].mode, segments[2].offset, segments[2].len),
+                    (Mode::Alphanumeric, 1, 0)
+                );
+            }
+            assert!(segments[..decoded.segment_count]
+                .iter()
+                .all(|segment| segment.eci == 3));
+        }
+    }
+}

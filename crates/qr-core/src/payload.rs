@@ -41,11 +41,14 @@ fn alpha(
     if *pending {
         *pending = false;
         if ch == b'%' {
-            return emit(output, len, b'%');
+            // The first percent already emitted GS. Keep the pair's byte in
+            // that segment, even when a header or segment boundary intervenes.
+            output[*len - 1] = b'%';
+            return Ok(());
         }
-        emit(output, len, 29)?;
     }
     if ch == b'%' {
+        emit(output, len, 29)?;
         *pending = true;
         Ok(())
     } else {
@@ -74,6 +77,7 @@ pub(crate) fn parse(
         2
     };
     let mut data_started = false;
+    let mut pending = false;
     while bits.left() > 0 {
         if bits.left() < 4 {
             let n = bits.left();
@@ -152,6 +156,12 @@ pub(crate) fn parse(
             }
             _ => {
                 data_started = true;
+                // Data mode switches end an Alphanumeric escape sequence,
+                // including zero-length data segments. ECI emits no data and
+                // preserves the sequence, as does an empty Alphanumeric segment.
+                if mode != Mode::Alphanumeric {
+                    pending = false;
+                }
                 let widths = match mode {
                     Mode::Numeric => [10, 12, 14],
                     Mode::Alphanumeric => [9, 11, 13],
@@ -188,7 +198,6 @@ pub(crate) fn parse(
                     }
                     Mode::Alphanumeric => {
                         let fnc = r.fnc1 != Fnc1::None;
-                        let mut pending = false;
                         while count >= 2 {
                             let v = bits.read(11)? as usize;
                             if v >= 45 * 45 {
@@ -204,9 +213,6 @@ pub(crate) fn parse(
                                 return Err(Error::MalformedPayload);
                             }
                             alpha(output, &mut r.payload_len, ALPHA[v], fnc, &mut pending)?;
-                        }
-                        if pending {
-                            emit(output, &mut r.payload_len, 29)?;
                         }
                     }
                     Mode::Byte => {

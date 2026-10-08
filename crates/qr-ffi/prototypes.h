@@ -23,6 +23,14 @@ enum qr_status {
     QR_OUTPUT_TOO_SMALL = 109,
     QR_SEGMENTS_TOO_SMALL = 110
 };
+#if QR_HAS_MICRO_QR
+enum qr_micro_ec_level {
+    QR_MICRO_EC_L = 0,
+    QR_MICRO_EC_M = 1,
+    QR_MICRO_EC_Q = 2
+};
+#define QR_MICRO_EC_NONE UINT32_MAX
+#endif
 enum qr_ec_level {
     QR_EC_L = 0,
     QR_EC_M = 1,
@@ -72,6 +80,48 @@ int32_t qr_memory(const qr_config *config, qr_memory_info *out);
 int32_t qr_decode_matrix(const uint8_t *bits, size_t bits_len, size_t side, uint8_t *scratch,
                          size_t scratch_len, uint8_t *payload, size_t payload_len,
                          qr_segment *segments, size_t segment_capacity, qr_result *result);
+#if QR_HAS_MICRO_QR
+/* Queries Micro QR limits, scratch sizes, and additive type layouts.
+ * Returns QR_OK, QR_INVALID_ARGUMENT, QR_OVERLAP, or QR_INVALID_CONFIG.
+ * config is mandatory/readable; out is mandatory/writable and success-only.
+ * The declaration and linked symbol require QR_HAS_MICRO_QR=1. */
+int32_t qr_micro_memory(const qr_config *config, qr_micro_memory_info *out);
+/* Decodes M1-M4 packed matrices. side is 11, 13, 15, or 17; no quiet zone.
+ * Requires matrix_core_scratch_bytes; segment_capacity <= max_segments.
+ * M1 reports QR_MICRO_EC_NONE. Orientation metadata reports any core rotation/reflection.
+ * This declaration and its linked symbol require QR_HAS_MICRO_QR=1. */
+int32_t qr_decode_micro_matrix(const uint8_t *bits, size_t bits_len, size_t side, uint8_t *scratch,
+                               size_t scratch_len, uint8_t *payload, size_t payload_len,
+                               qr_segment *segments, size_t segment_capacity,
+                               qr_micro_result *result);
+#endif
+#if QR_HAS_MICRO_QR_DETECT
+/* Micro QR Gray8 detection has the same image, pointer, budget and sampling contracts as
+ * the corresponding Model 2 calls. Query qr_micro_memory for both scratch lengths.
+ * The detector is bounded and affine; strong projective distortion may return QR_NOT_FOUND.
+ * These declarations and linked symbols require QR_HAS_MICRO_QR_DETECT=1. */
+int32_t qr_decode_micro_gray(const qr_config *config, const uint8_t *pixels, size_t pixels_len,
+                             size_t width, size_t height, size_t stride, uint8_t *detector_scratch,
+                             size_t detector_scratch_len, uint8_t *core_scratch,
+                             size_t core_scratch_len, uint8_t *payload, size_t payload_len,
+                             qr_segment *segments, size_t segment_capacity,
+                             qr_micro_result *result);
+int32_t qr_decode_micro_gray_with_budget(const qr_config *config, size_t max_pixel_reads,
+                                         const uint8_t *pixels, size_t pixels_len, size_t width,
+                                         size_t height, size_t stride, uint8_t *detector_scratch,
+                                         size_t detector_scratch_len, uint8_t *core_scratch,
+                                         size_t core_scratch_len, uint8_t *payload,
+                                         size_t payload_len, qr_segment *segments,
+                                         size_t segment_capacity, qr_micro_result *result);
+/* Explicit sampling with optional stats. Stats are written only after the decoder starts;
+ * argument, configuration, and image rejection preserve them. */
+int32_t qr_decode_micro_gray_with_sampling(
+    const qr_config *config, size_t max_pixel_reads, uint32_t strategy, const uint8_t *pixels,
+    size_t pixels_len, size_t width, size_t height, size_t stride, uint8_t *detector_scratch,
+    size_t detector_scratch_len, uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload,
+    size_t payload_len, qr_segment *segments, size_t segment_capacity, qr_micro_result *result,
+    qr_stats *stats);
+#endif
 /* Decodes the first symbol in a Gray8 ROI; pixels starts at the ROI top-left.
  * Nonzero width/height, stride >= width, and (height-1)*stride+width bytes are required.
  * Last-row trailing padding is unnecessary; input is never copied.

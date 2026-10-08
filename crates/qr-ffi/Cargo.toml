@@ -11,6 +11,8 @@ crate-type = ["rlib", "staticlib"]
 [features]
 default = ["host"]
 host = []
+micro-qr = ["qr/micro-qr"]
+micro-qr-detect = ["micro-qr", "qr/micro-qr-detect"]
 
 [dependencies]
 qr = { path = "../qr" }

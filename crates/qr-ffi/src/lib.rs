@@ -1,4 +1,4 @@
-//! Allocation-free C ABI for QR Model 2 matrix and Gray8 decoding.
+//! Allocation-free C ABI for QR Model 2 and opt-in Micro QR decoding.
 //!
 //! Call [`qr_default_config`] and [`qr_memory`] before allocating caller-owned
 //! storage. [`qr_decode_matrix`] and [`qr_decode_gray`] borrow input and initialize
@@ -38,6 +38,22 @@ macro_rules! abi_struct {
 }
 include!("../abi_schema.rs");
 abi_schema!();
+/// Sentinel stored in [`QrMicroResult::ec_level`] for M1 detection-only parity.
+#[cfg(feature = "micro-qr")]
+pub const QR_MICRO_EC_NONE: u32 = u32::MAX;
+#[cfg(feature = "micro-qr")]
+const MICRO_MATRIX_CORE_SCRATCH_BYTES: usize = 439;
+#[cfg(feature = "micro-qr")]
+const MICRO_IMAGE_CORE_SCRATCH_BYTES: usize = qcore::SCRATCH_BYTES;
+#[cfg(feature = "micro-qr")]
+const MICRO_MAX_PAYLOAD_BYTES: usize = 35;
+#[cfg(feature = "micro-qr")]
+const MICRO_MAX_SEGMENTS: usize = 16;
+#[cfg(feature = "micro-qr")]
+const _: () = {
+    assert!(qcore::MICRO_SCRATCH_BYTES == MICRO_MATRIX_CORE_SCRATCH_BYTES);
+    assert!(qcore::MICRO_MAX_PAYLOAD_BYTES == MICRO_MAX_PAYLOAD_BYTES);
+};
 #[cfg(not(feature = "host"))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
@@ -164,6 +180,21 @@ fn result(d: qcore::Decoded) -> QrResult {
     }
     r
 }
+#[cfg(feature = "micro-qr")]
+fn micro_result(d: qcore::MicroDecoded) -> QrMicroResult {
+    QrMicroResult {
+        version: d.version as u32,
+        ec_level: d.ec_level.map_or(QR_MICRO_EC_NONE, |level| level as u32),
+        mask: d.mask as u32,
+        payload_len: d.payload_len,
+        segment_count: d.segment_count,
+        corrected_codewords: d.corrected_codewords as u32,
+        format_distance: d.format_distance as u32,
+        rotation: d.rotation as u32,
+        mirrored: d.mirrored as u32,
+        ..QrMicroResult::default()
+    }
+}
 /// Writes default runtime budgets: 32 finders, 4096 candidates, 256 sampling
 /// attempts, row step 1, and local radius 24.
 ///
@@ -220,6 +251,113 @@ pub unsafe extern "C" fn qr_memory(c: *const QrConfig, out: *mut QrMemory) -> i3
         };
         unsafe {
             out.write(r);
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+/// Queries the linked Micro QR limits, scratch requirements, and
+/// additive C type layouts without changing [`QrMemory`] or ABI version 1.
+///
+/// The query and matrix decoder are exported with Cargo feature `micro-qr`.
+/// Returns 0, 1 for invalid pointer arithmetic/alignment, 2 for overlap, or 12
+/// for invalid configuration. `out` is written only on success.
+/// # Safety
+/// `c` must point to one initialized, readable [`QrConfig`] and `out` to one
+/// live, aligned, exclusively writable [`QrMicroMemory`]. Their allocations
+/// must remain live and disjoint for the duration of the call.
+#[no_mangle]
+#[cfg(feature = "micro-qr")]
+pub unsafe extern "C" fn qr_micro_memory(c: *const QrConfig, out: *mut QrMicroMemory) -> i32 {
+    let run = || -> Result<(), i32> {
+        disjoint(&[range(c, 1)?, range(out, 1)?])?;
+        let detector_scratch_bytes = config(unsafe { c.read() })
+            .scratch_bytes()
+            .map_err(status)?;
+        unsafe {
+            out.write(QrMicroMemory {
+                abi_version: 1,
+                max_width: MAX_WIDTH as u32,
+                max_height: MAX_HEIGHT as u32,
+                matrix_core_scratch_bytes: MICRO_MATRIX_CORE_SCRATCH_BYTES,
+                image_core_scratch_bytes: if cfg!(feature = "micro-qr-detect") {
+                    MICRO_IMAGE_CORE_SCRATCH_BYTES
+                } else {
+                    0
+                },
+                detector_scratch_bytes: if cfg!(feature = "micro-qr-detect") {
+                    detector_scratch_bytes
+                } else {
+                    0
+                },
+                scratch_alignment: 1,
+                max_payload_bytes: MICRO_MAX_PAYLOAD_BYTES,
+                max_segments: MICRO_MAX_SEGMENTS,
+                segment_size: size_of::<QrSegment>(),
+                segment_alignment: align_of::<QrSegment>(),
+                result_size: size_of::<QrMicroResult>(),
+                result_alignment: align_of::<QrMicroResult>(),
+                stats_size: size_of::<QrStats>(),
+                stats_alignment: align_of::<QrStats>(),
+            });
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Decodes a packed row-major, MSB-first M1 through M4 matrix.
+///
+/// `side` is 11, 13, 15, or 17 and the quiet zone is excluded. Supply the
+/// `matrix_core_scratch_bytes` reported by [`qr_micro_memory`]. M1 reports
+/// [`QR_MICRO_EC_NONE`]. This symbol is exported with Cargo feature `micro-qr`.
+/// # Safety
+/// The allocation, lifetime, alignment, exclusivity, initialization, and
+/// disjointness requirements of [`qr_decode_matrix`] apply to the corresponding
+/// spans and to one writable [`QrMicroResult`] at `out`.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+#[cfg(feature = "micro-qr")]
+pub unsafe extern "C" fn qr_decode_micro_matrix(
+    bits: *const u8,
+    bits_len: usize,
+    side: usize,
+    scratch: *mut u8,
+    scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrMicroResult,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        if segment_capacity > MICRO_MAX_SEGMENTS {
+            return Err(1);
+        }
+        disjoint(&[
+            range(bits, bits_len)?,
+            range(scratch, scratch_len)?,
+            range(payload, payload_len)?,
+            range(segments, segment_capacity)?,
+            range(out, 1)?,
+        ])?;
+        let matrix = qcore::MicroMatrix::new(unsafe { bytes(bits, bits_len) }, side)
+            .map_err(|e| 100 + e as i32)?;
+        let decoded = qcore::decode_micro(
+            matrix,
+            unsafe { bytes_mut(scratch, scratch_len) },
+            unsafe { bytes_mut(payload, payload_len) },
+            unsafe { segments_mut(segments, segment_capacity) },
+        )
+        .map_err(|e| 100 + e as i32)?;
+        unsafe {
+            out.write(micro_result(decoded));
         }
         Ok(())
     };
@@ -291,6 +429,270 @@ pub unsafe extern "C" fn qr_decode_matrix(
     match run() {
         Ok(()) => 0,
         Err(e) => e,
+    }
+}
+#[cfg(feature = "micro-qr-detect")]
+fn micro_detection_result(d: detect::MicroDetection) -> QrMicroResult {
+    let mut r = micro_result(d.decoded);
+    r.inverted = d.inverted as u32;
+    r.local_threshold = d.local_threshold as u32;
+    r.candidates = d.stats.candidates;
+    r.retries = d.stats.retries;
+    [
+        r.corner0_x,
+        r.corner0_y,
+        r.corner1_x,
+        r.corner1_y,
+        r.corner2_x,
+        r.corner2_y,
+        r.corner3_x,
+        r.corner3_y,
+    ] = [
+        d.corners[0].x,
+        d.corners[0].y,
+        d.corners[1].x,
+        d.corners[1].y,
+        d.corners[2].x,
+        d.corners[2].y,
+        d.corners[3].x,
+        d.corners[3].y,
+    ];
+    r
+}
+
+/// Decodes the first Micro QR symbol in a Gray8 ROI using the finite default
+/// pixel-read budget and center-then-majority-five sampling.
+///
+/// This symbol is exported with Cargo feature `micro-qr-detect`. Query
+/// [`qr_micro_memory`] for the detector and image-core scratch sizes.
+/// # Safety
+/// All allocation, lifetime, initialization, alignment, exclusive-access, and
+/// disjointness requirements of [`qr_decode_gray`] apply to corresponding spans
+/// and to one writable [`QrMicroResult`] at `out`.
+#[cfg(feature = "micro-qr-detect")]
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_decode_micro_gray(
+    c: *const QrConfig,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrMicroResult,
+) -> i32 {
+    unsafe {
+        qr_decode_micro_gray_with_budget(
+            c,
+            detect::DEFAULT_MAX_PIXEL_READS,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+        )
+    }
+}
+
+/// Like [`qr_decode_micro_gray`], with an explicit shared input-pixel-read limit.
+/// Zero returns invalid-config status 12; exhaustion returns pixel-budget status 18.
+/// This symbol is exported with Cargo feature `micro-qr-detect`.
+/// # Safety
+/// All requirements of [`qr_decode_micro_gray`] apply without change.
+#[cfg(feature = "micro-qr-detect")]
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_decode_micro_gray_with_budget(
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrMicroResult,
+) -> i32 {
+    unsafe {
+        qr_decode_micro_gray_with_sampling(
+            c,
+            max_pixel_reads,
+            QR_DEFAULT_SAMPLING_STRATEGY,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            ptr::null_mut(),
+        )
+    }
+}
+
+#[cfg(feature = "micro-qr-detect")]
+struct MicroGrayCall {
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    strategy: u32,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrMicroResult,
+    stats: *mut QrStats,
+}
+
+#[cfg(feature = "micro-qr-detect")]
+unsafe fn micro_gray_call(a: MicroGrayCall) -> i32 {
+    let run = || -> Result<(), i32> {
+        if a.segment_capacity > MICRO_MAX_SEGMENTS {
+            return Err(1);
+        }
+        disjoint(&[
+            range(a.c, 1)?,
+            range(a.pixels, a.pixels_len)?,
+            range(a.detector_scratch, a.detector_scratch_len)?,
+            range(a.core_scratch, a.core_scratch_len)?,
+            range(a.payload, a.payload_len)?,
+            range(a.segments, a.segment_capacity)?,
+            range(a.out, 1)?,
+            range(a.stats, usize::from(!a.stats.is_null()))?,
+        ])?;
+        let strategy = sampling(a.strategy)?;
+        let mut cfg = config(unsafe { a.c.read() });
+        cfg.max_pixel_reads = a.max_pixel_reads;
+        cfg.scratch_bytes().map_err(status)?;
+        let image = detect::GrayImage::new(
+            unsafe { bytes(a.pixels, a.pixels_len) },
+            a.width,
+            a.height,
+            a.stride,
+        )
+        .map_err(status)?;
+        let mut stats = detect::Stats::default();
+        // All ranges, enum values, configuration, and image dimensions were checked first.
+        let decoded = detect::decode_micro_with_sampling(
+            image,
+            &cfg,
+            strategy,
+            unsafe { bytes_mut(a.detector_scratch, a.detector_scratch_len) },
+            unsafe { bytes_mut(a.core_scratch, a.core_scratch_len) },
+            unsafe { bytes_mut(a.payload, a.payload_len) },
+            unsafe { segments_mut(a.segments, a.segment_capacity) },
+            &mut stats,
+        );
+        if !a.stats.is_null() {
+            unsafe {
+                a.stats.write(work(stats));
+            }
+        }
+        let found = decoded.map_err(status)?;
+        unsafe {
+            a.out.write(micro_detection_result(found));
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
+/// Decodes a Micro QR Gray8 ROI with explicit pixel budget and sampling policy.
+///
+/// Strategies are [`QR_SAMPLING_CENTER`] and
+/// [`QR_SAMPLING_CENTER_THEN_MAJORITY5`]. A null `stats` is allowed. Nonnull
+/// stats are written after detector invocation on success or failure; pre-decode
+/// rejection leaves stats untouched. Result storage is success-only. This symbol
+/// is exported with Cargo feature `micro-qr-detect`.
+/// # Safety
+/// All requirements of [`qr_decode_micro_gray`] apply. Nonnull `stats` must name
+/// one live, aligned, exclusively writable [`QrStats`] disjoint from every span.
+#[cfg(feature = "micro-qr-detect")]
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_decode_micro_gray_with_sampling(
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    strategy: u32,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrMicroResult,
+    stats: *mut QrStats,
+) -> i32 {
+    unsafe {
+        micro_gray_call(MicroGrayCall {
+            c,
+            max_pixel_reads,
+            strategy,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            stats,
+        })
     }
 }
 /// Decodes the first symbol found in a borrowed Gray8 ROI.

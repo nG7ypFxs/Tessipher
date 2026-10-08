@@ -3,6 +3,15 @@
 #define TESSIPHER_H
 #include <stddef.h>
 #include <stdint.h>
+#ifndef QR_HAS_MICRO_QR
+#define QR_HAS_MICRO_QR 0
+#endif
+#ifndef QR_HAS_MICRO_QR_DETECT
+#define QR_HAS_MICRO_QR_DETECT 0
+#endif
+#if QR_HAS_MICRO_QR_DETECT && !QR_HAS_MICRO_QR
+#error "QR_HAS_MICRO_QR_DETECT requires QR_HAS_MICRO_QR"
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -163,6 +172,86 @@ typedef struct qr_tracker_memory_info {
     /* Required stats alignment in bytes. */
     size_t stats_alignment;
 } qr_tracker_memory_info;
+/* Micro QR requirements, caller-owned storage sizes, and target ABI layouts. */
+/* This additive query does not change qr_memory_info or ABI version 1. */
+typedef struct qr_micro_memory_info {
+    /* ABI version of the original C interface (currently 1). */
+    uint32_t abi_version;
+    /* Compiled maximum ROI width, in pixels. */
+    uint32_t max_width;
+    /* Compiled maximum ROI height, in pixels. */
+    uint32_t max_height;
+    /* Scratch bytes required by qr_decode_micro_matrix (439). */
+    size_t matrix_core_scratch_bytes;
+    /* Core scratch bytes required by Micro QR Gray8 entry points (7077), or zero when unavailable.
+     */
+    size_t image_core_scratch_bytes;
+    /* Detector scratch bytes for the queried configuration, or zero when unavailable. */
+    size_t detector_scratch_bytes;
+    /* Required alignment of all byte scratch buffers (1). */
+    size_t scratch_alignment;
+    /* Largest decoded Micro QR payload, in bytes (35). */
+    size_t max_payload_bytes;
+    /* Conservative segment capacity sufficient for every Micro QR symbol (16). */
+    size_t max_segments;
+    /* Size of one qr_segment on this target, in bytes. */
+    size_t segment_size;
+    /* Required qr_segment alignment on this target, in bytes. */
+    size_t segment_alignment;
+    /* Size of one qr_micro_result on this target, in bytes. */
+    size_t result_size;
+    /* Required qr_micro_result alignment on this target, in bytes. */
+    size_t result_alignment;
+    /* Size of one qr_stats on this target, in bytes. */
+    size_t stats_size;
+    /* Required qr_stats alignment on this target, in bytes. */
+    size_t stats_alignment;
+} qr_micro_memory_info;
+/* Successful Micro QR decoding metadata. */
+typedef struct qr_micro_result {
+    /* Micro QR version (1=M1, 2=M2, 3=M3, 4=M4). */
+    uint32_t version;
+    /* Error correction: 0=L, 1=M, 2=Q, or QR_MICRO_EC_NONE for M1. */
+    uint32_t ec_level;
+    /* Micro QR mask pattern (0..=3). */
+    uint32_t mask;
+    /* Valid prefix length of the payload output, in bytes. */
+    size_t payload_len;
+    /* Valid segment count. */
+    size_t segment_count;
+    /* Corrected codewords in the symbol's single Reed-Solomon block. */
+    uint32_t corrected_codewords;
+    /* Selected format BCH Hamming distance (0..=3). */
+    uint32_t format_distance;
+    /* Clockwise quarter turns used to orient the symbol (0..=3). */
+    uint32_t rotation;
+    /* One when core decoding required reflection after rotation. */
+    uint32_t mirrored;
+    /* One for an inverted-polarity detection; zero for matrix decoding. */
+    uint32_t inverted;
+    /* One for local-threshold detection; zero for matrix decoding. */
+    uint32_t local_threshold;
+    /* Finder candidates examined; zero for matrix decoding. */
+    size_t candidates;
+    /* Sampling attempts; zero for matrix decoding. */
+    size_t retries;
+    /* ROI-relative x of sampled-grid boundary (0,0); zero for matrix decoding. */
+    float corner0_x;
+    /* ROI-relative y of sampled-grid boundary (0,0); zero for matrix decoding. */
+    float corner0_y;
+    /* ROI-relative x of sampled-grid boundary (side,0); zero for matrix decoding. */
+    float corner1_x;
+    /* ROI-relative y of sampled-grid boundary (side,0); zero for matrix decoding. */
+    float corner1_y;
+    /* ROI-relative x of sampled-grid boundary (side,side); zero for matrix decoding. */
+    float corner2_x;
+    /* ROI-relative y of sampled-grid boundary (side,side); zero for matrix decoding. */
+    float corner2_y;
+    /* ROI-relative x of sampled-grid boundary (0,side); zero for matrix decoding. */
+    float corner3_x;
+    /* ROI-relative y of sampled-grid boundary (0,side); zero for matrix decoding. */
+    float corner3_y;
+} qr_micro_result;
 /* Integer return/metadata constants; function ABI uses fixed-width integer types. */
 enum qr_status {
     QR_OK = 0,
@@ -188,6 +277,14 @@ enum qr_status {
     QR_OUTPUT_TOO_SMALL = 109,
     QR_SEGMENTS_TOO_SMALL = 110
 };
+#if QR_HAS_MICRO_QR
+enum qr_micro_ec_level {
+    QR_MICRO_EC_L = 0,
+    QR_MICRO_EC_M = 1,
+    QR_MICRO_EC_Q = 2
+};
+#define QR_MICRO_EC_NONE UINT32_MAX
+#endif
 enum qr_ec_level {
     QR_EC_L = 0,
     QR_EC_M = 1,
@@ -237,6 +334,48 @@ int32_t qr_memory(const qr_config *config, qr_memory_info *out);
 int32_t qr_decode_matrix(const uint8_t *bits, size_t bits_len, size_t side, uint8_t *scratch,
                          size_t scratch_len, uint8_t *payload, size_t payload_len,
                          qr_segment *segments, size_t segment_capacity, qr_result *result);
+#if QR_HAS_MICRO_QR
+/* Queries Micro QR limits, scratch sizes, and additive type layouts.
+ * Returns QR_OK, QR_INVALID_ARGUMENT, QR_OVERLAP, or QR_INVALID_CONFIG.
+ * config is mandatory/readable; out is mandatory/writable and success-only.
+ * The declaration and linked symbol require QR_HAS_MICRO_QR=1. */
+int32_t qr_micro_memory(const qr_config *config, qr_micro_memory_info *out);
+/* Decodes M1-M4 packed matrices. side is 11, 13, 15, or 17; no quiet zone.
+ * Requires matrix_core_scratch_bytes; segment_capacity <= max_segments.
+ * M1 reports QR_MICRO_EC_NONE. Orientation metadata reports any core rotation/reflection.
+ * This declaration and its linked symbol require QR_HAS_MICRO_QR=1. */
+int32_t qr_decode_micro_matrix(const uint8_t *bits, size_t bits_len, size_t side, uint8_t *scratch,
+                               size_t scratch_len, uint8_t *payload, size_t payload_len,
+                               qr_segment *segments, size_t segment_capacity,
+                               qr_micro_result *result);
+#endif
+#if QR_HAS_MICRO_QR_DETECT
+/* Micro QR Gray8 detection has the same image, pointer, budget and sampling contracts as
+ * the corresponding Model 2 calls. Query qr_micro_memory for both scratch lengths.
+ * The detector is bounded and affine; strong projective distortion may return QR_NOT_FOUND.
+ * These declarations and linked symbols require QR_HAS_MICRO_QR_DETECT=1. */
+int32_t qr_decode_micro_gray(const qr_config *config, const uint8_t *pixels, size_t pixels_len,
+                             size_t width, size_t height, size_t stride, uint8_t *detector_scratch,
+                             size_t detector_scratch_len, uint8_t *core_scratch,
+                             size_t core_scratch_len, uint8_t *payload, size_t payload_len,
+                             qr_segment *segments, size_t segment_capacity,
+                             qr_micro_result *result);
+int32_t qr_decode_micro_gray_with_budget(const qr_config *config, size_t max_pixel_reads,
+                                         const uint8_t *pixels, size_t pixels_len, size_t width,
+                                         size_t height, size_t stride, uint8_t *detector_scratch,
+                                         size_t detector_scratch_len, uint8_t *core_scratch,
+                                         size_t core_scratch_len, uint8_t *payload,
+                                         size_t payload_len, qr_segment *segments,
+                                         size_t segment_capacity, qr_micro_result *result);
+/* Explicit sampling with optional stats. Stats are written only after the decoder starts;
+ * argument, configuration, and image rejection preserve them. */
+int32_t qr_decode_micro_gray_with_sampling(
+    const qr_config *config, size_t max_pixel_reads, uint32_t strategy, const uint8_t *pixels,
+    size_t pixels_len, size_t width, size_t height, size_t stride, uint8_t *detector_scratch,
+    size_t detector_scratch_len, uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload,
+    size_t payload_len, qr_segment *segments, size_t segment_capacity, qr_micro_result *result,
+    qr_stats *stats);
+#endif
 /* Decodes the first symbol in a Gray8 ROI; pixels starts at the ROI top-left.
  * Nonzero width/height, stride >= width, and (height-1)*stride+width bytes are required.
  * Last-row trailing padding is unnecessary; input is never copied.

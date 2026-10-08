@@ -25,7 +25,11 @@ fn main() {
         ),
     )
     .unwrap();
-    let mut header=String::from("/* Generated from qr-ffi/abi_schema.rs and prototypes.h. Do not edit. */\n#ifndef TESSIPHER_H\n#define TESSIPHER_H\n#include <stddef.h>\n#include <stdint.h>\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n");
+    let micro = env::var_os("CARGO_FEATURE_MICRO_QR").is_some() as u8;
+    let micro_detect = env::var_os("CARGO_FEATURE_MICRO_QR_DETECT").is_some() as u8;
+    let mut header = format!(
+        "/* Generated from qr-ffi/abi_schema.rs and prototypes.h. Do not edit. */\n#ifndef TESSIPHER_H\n#define TESSIPHER_H\n#include <stddef.h>\n#include <stdint.h>\n#ifndef QR_HAS_MICRO_QR\n#define QR_HAS_MICRO_QR {micro}\n#endif\n#ifndef QR_HAS_MICRO_QR_DETECT\n#define QR_HAS_MICRO_QR_DETECT {micro_detect}\n#endif\n#if QR_HAS_MICRO_QR_DETECT && !QR_HAS_MICRO_QR\n#error \"QR_HAS_MICRO_QR_DETECT requires QR_HAS_MICRO_QR\"\n#endif\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n"
+    );
     macro_rules! c_type {
         (u32) => {
             "uint32_t"

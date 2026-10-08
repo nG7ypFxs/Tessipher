@@ -160,4 +160,85 @@ abi_struct! {
     /// Required stats alignment in bytes.
     stats_alignment: usize
 }}
+abi_struct! {
+    /// Micro QR requirements, caller-owned storage sizes, and target ABI layouts.
+    /// This additive query does not change qr_memory_info or ABI version 1.
+    QrMicroMemory => "qr_micro_memory_info" {
+    /// ABI version of the original C interface (currently 1).
+    abi_version: u32,
+    /// Compiled maximum ROI width, in pixels.
+    max_width: u32,
+    /// Compiled maximum ROI height, in pixels.
+    max_height: u32,
+    /// Scratch bytes required by qr_decode_micro_matrix (439).
+    matrix_core_scratch_bytes: usize,
+    /// Core scratch bytes required by Micro QR Gray8 entry points (7077), or zero when unavailable.
+    image_core_scratch_bytes: usize,
+    /// Detector scratch bytes for the queried configuration, or zero when unavailable.
+    detector_scratch_bytes: usize,
+    /// Required alignment of all byte scratch buffers (1).
+    scratch_alignment: usize,
+    /// Largest decoded Micro QR payload, in bytes (35).
+    max_payload_bytes: usize,
+    /// Conservative segment capacity sufficient for every Micro QR symbol (16).
+    max_segments: usize,
+    /// Size of one qr_segment on this target, in bytes.
+    segment_size: usize,
+    /// Required qr_segment alignment on this target, in bytes.
+    segment_alignment: usize,
+    /// Size of one qr_micro_result on this target, in bytes.
+    result_size: usize,
+    /// Required qr_micro_result alignment on this target, in bytes.
+    result_alignment: usize,
+    /// Size of one qr_stats on this target, in bytes.
+    stats_size: usize,
+    /// Required qr_stats alignment on this target, in bytes.
+    stats_alignment: usize
+}}
+abi_struct! {
+    /// Successful Micro QR decoding metadata.
+    QrMicroResult => "qr_micro_result" {
+    /// Micro QR version (1=M1, 2=M2, 3=M3, 4=M4).
+    version: u32,
+    /// Error correction: 0=L, 1=M, 2=Q, or QR_MICRO_EC_NONE for M1.
+    ec_level: u32,
+    /// Micro QR mask pattern (0..=3).
+    mask: u32,
+    /// Valid prefix length of the payload output, in bytes.
+    payload_len: usize,
+    /// Valid segment count.
+    segment_count: usize,
+    /// Corrected codewords in the symbol's single Reed-Solomon block.
+    corrected_codewords: u32,
+    /// Selected format BCH Hamming distance (0..=3).
+    format_distance: u32,
+    /// Clockwise quarter turns used to orient the symbol (0..=3).
+    rotation: u32,
+    /// One when core decoding required reflection after rotation.
+    mirrored: u32,
+    /// One for an inverted-polarity detection; zero for matrix decoding.
+    inverted: u32,
+    /// One for local-threshold detection; zero for matrix decoding.
+    local_threshold: u32,
+    /// Finder candidates examined; zero for matrix decoding.
+    candidates: usize,
+    /// Sampling attempts; zero for matrix decoding.
+    retries: usize,
+    /// ROI-relative x of sampled-grid boundary (0,0); zero for matrix decoding.
+    corner0_x: f32,
+    /// ROI-relative y of sampled-grid boundary (0,0); zero for matrix decoding.
+    corner0_y: f32,
+    /// ROI-relative x of sampled-grid boundary (side,0); zero for matrix decoding.
+    corner1_x: f32,
+    /// ROI-relative y of sampled-grid boundary (side,0); zero for matrix decoding.
+    corner1_y: f32,
+    /// ROI-relative x of sampled-grid boundary (side,side); zero for matrix decoding.
+    corner2_x: f32,
+    /// ROI-relative y of sampled-grid boundary (side,side); zero for matrix decoding.
+    corner2_y: f32,
+    /// ROI-relative x of sampled-grid boundary (0,side); zero for matrix decoding.
+    corner3_x: f32,
+    /// ROI-relative y of sampled-grid boundary (0,side); zero for matrix decoding.
+    corner3_y: f32
+}}
 }; }

@@ -45,6 +45,43 @@ jobs:
       - run: cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release --locked
       - run: python3 tools/check_symbols.py
       - run: cargo check -p qr --target wasm32-unknown-unknown --locked
+  zephyr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+          targets: thumbv7m-none-eabi
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.10.10"
+          cache-dependency-glob: "tools/*.py"
+      - name: Install pinned Zephyr and ARM SDK
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zephyr-venv"
+          export PATH="$RUNNER_TEMP/zephyr-venv/bin:$PATH"
+          python -m pip install west cmake ninja
+          git clone --depth 1 --branch v4.4.2 https://github.com/zephyrproject-rtos/zephyr.git "$RUNNER_TEMP/zephyr-workspace/zephyr"
+          west init -l "$RUNNER_TEMP/zephyr-workspace/zephyr"
+          (cd "$RUNNER_TEMP/zephyr-workspace" && west update cmsis cmsis_6)
+          python -m pip install \
+            -r "$RUNNER_TEMP/zephyr-workspace/zephyr/scripts/requirements-base.txt" \
+            -r "$RUNNER_TEMP/zephyr-workspace/zephyr/scripts/requirements-build-test.txt" \
+            -r "$RUNNER_TEMP/zephyr-workspace/zephyr/scripts/requirements-run-test.txt"
+          curl -L --fail https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.1/zephyr-sdk-1.0.1_linux-x86_64_minimal.tar.xz -o "$RUNNER_TEMP/zephyr-sdk.tar.xz"
+          echo "ca9bc0ff66fafca1dac9d592a36d953cf16d096a9d09b1c0357f021cf9f6a7eb  $RUNNER_TEMP/zephyr-sdk.tar.xz" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/zephyr-sdk.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/zephyr-sdk-1.0.1/setup.sh" -t arm-zephyr-eabi -h
+      - name: Run Cortex-M3 QEMU tests
+        shell: bash
+        run: |
+          export PATH="$RUNNER_TEMP/zephyr-venv/bin:$PATH"
+          python tools/test_zephyr_smoke.py
+          python tools/zephyr_smoke.py \
+            --zephyr-base "$RUNNER_TEMP/zephyr-workspace/zephyr" \
+            --sdk-dir "$RUNNER_TEMP/zephyr-sdk-1.0.1"
   fuzz:
     runs-on: ubuntu-latest
     steps:

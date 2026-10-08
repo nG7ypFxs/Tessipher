@@ -1,0 +1,11 @@
+tests:
+  tessipher.ffi:
+    tags:
+      - ffi
+      - qr
+    harness: ztest
+    platform_allow:
+      - mps2/an385
+    integration_platforms:
+      - mps2/an385
+    timeout: 120

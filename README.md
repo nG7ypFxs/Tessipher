@@ -79,6 +79,8 @@ pixels. Read payload and segment prefixes only after `QR_OK`.
 The complete [C example](examples/c_decode.c) decodes a repository fixture;
 [C integration](docs/ffi.md) covers compile/link commands, ROI layout, budgets,
 output interpretation, every status code, and firmware builds.
+The [Zephyr/QEMU example](docs/zephyr.md) checks the C ABI under Zephyr on a
+Cortex-M3, including matrix and Gray8 decoding and pixel-budget failure.
 
 ## Build and validation
 

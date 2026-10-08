@@ -16,7 +16,7 @@ The root `.clang-format` uses four spaces and a 100-column limit while preservin
 include order and wrapping long comments. The formatter includes tracked and untracked
 nonignored `.c` and `.h` files, excluding vendor and build directories.
 Set `CLANG_FORMAT` to a specific executable if needed; its version must match
-the pin. CI uses uv with the same inline dependencies for host checks.
+the pin. CI uses uv with the same inline dependencies for host and Zephyr checks.
 
 ```sh
 # Static library for host C tests
@@ -62,6 +62,7 @@ Cross builds put the archive under
 `target/<target-triple>/release/libqr_ffi.a` (or the corresponding custom target
 directory). Firmware linking uses the board's linker script and target toolchain,
 not these host system libraries. Physical MCU integration has not been validated.
+For a Zephyr RTOS execution check, see [Zephyr and QEMU](zephyr.md).
 
 The default `host` feature of `qr-ffi` links std for host staticlib tests.
 Use `--no-default-features --release` for firmware.

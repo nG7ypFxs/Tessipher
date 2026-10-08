@@ -139,3 +139,49 @@ Adopting this recommendation rejects three-codeword corruption in V1-L and five-
 Damage beyond correction capacity can produce another valid codeword; excessive corruption is not guaranteed to be detected.
 Within each orientation, BCH decoding rejects two copies that indicate different valid values at the same minimum distance.
 Even when normal orientation fails with this conflict, a successful transpose decode is returned as success.
+
+## Opt-in sampling and caller-owned tracking
+
+`qr_detect::decode_with_sampling(image, config, strategy, scratch, core_scratch,
+output, segments, stats)` is also exported as `qr::decode_gray_with_sampling`.
+`SamplingStrategy::Center` preserves the legacy path. `CenterThenMajority5`
+retries only after a complete center matrix sample fails core content decoding;
+input, capacity, budget, or invalid-projection failures return without fallback.
+The fallback consumes one additional `max_retries` attempt. A core transpose
+retry continues to reuse the same matrix without consuming a sampling attempt.
+
+`GrayImage::sub_roi(Rect { x, y, width, height })` checks nonzero dimensions,
+checked extent arithmetic, and parent bounds, and retains the parent stride.
+It does not copy pixels and needs no padding after the final row. All subregion
+coordinates are relative to the `GrayImage` on which the method is called.
+
+```rust
+use qr::{Config, GrayImage, SamplingStrategy, Segment, Stats, Tracker};
+let config = Config::<640, 480>::default();
+let mut detector = vec![0; config.scratch_bytes().unwrap()];
+let mut core = vec![0; qr::core::SCRATCH_BYTES];
+let mut payload = [0; 128];
+let mut segments = [Segment::EMPTY; 16];
+let mut tracker = Tracker::new(); // Reuse this small value between frames.
+let mut stats = Stats::default();
+let pixels = [255; 16];
+let frame = GrayImage::new(&pixels, 4, 4, 4).unwrap();
+let result = tracker.decode_with_stats(frame, &config,
+    SamplingStrategy::CenterThenMajority5, &mut detector, &mut core,
+    &mut payload, &mut segments, &mut stats);
+assert_eq!(result, Err(qr::detect::Error::NotFound));
+```
+
+The example allocates buffers in the caller for convenience; detector and tracker
+calls allocate nothing. `Tracker::state()` returns `TrackerState`, and `reset()`
+discards saved coordinates. `TrackHint` stores only `Rect`, input width, and input
+height. A `Candidate` hint is **not confirmation of QR presence**. `TrackerStats`
+is an alias of `Stats`; its `passes` may reach eight for a ROI plus full search.
+All `Config` limits and scratch requirements apply to the complete input image,
+including when the saved ROI is smaller. `Detection::stats` equals the supplied
+stats on success; failure stats still include all completed and partial reads.
+
+`Tracker::from_state(state)` safely restores saved Rust enum state. Candidate
+misses must be exactly one; image dimensions must be in 1..=32768, and the
+nonempty integer rectangle must fit those saved dimensions without arithmetic
+overflow. Its validation uses saved dimensions, independently of the next frame.

@@ -89,3 +89,19 @@ See [C ABI](docs/ffi.md) for Cortex-M commands and pointer contracts, and the [v
 The standard editions checked for this project are ISO/IEC 18004:2024 (fourth edition) and the corresponding JIS X 0510:2026.
 No certification testing against the entire standard has been performed, and this project makes no certification claim.
 References: [ISO](https://www.iso.org/standard/83389.html) and the [Japanese Standards Association](https://webdesk.jsa.or.jp/books/W11M0090/index/?bunsyo_id=JIS+X+0510%3A2026).
+
+## Optional sampling and frame tracking
+
+The Rust APIs `qr::decode_gray_with_sampling` and `qr::Tracker::decode_with_stats`
+accept `SamplingStrategy::CenterThenMajority5`. Each projection first uses the
+legacy center sample; only a core content failure retries five fixed points at
+center and ±0.25 module along the two grid axes. The legacy Rust APIs retain center
+sampling. Buffer sizes and existing C struct layouts remain unchanged.
+
+`Tracker::new()` starts in `Searching`. Successful frames retain an expanded
+integer ROI in `Tracking`; one complete frame miss enters `Candidate`, and a
+second discards the hint. ROI failure triggers a full-image search in the same
+frame, sharing all budgets and counters. Returned corners refer to the complete
+input image. The tracker borrows no image, scratch, or decoded payload between
+calls. See [detection](docs/detection.md) for transitions and limitations and
+[API](docs/api.md) for usage.

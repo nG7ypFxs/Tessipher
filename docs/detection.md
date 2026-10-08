@@ -51,7 +51,7 @@ An alignment match is preferred when its score is high and its position is close
 
 After the alignment-based attempt, the detector tries the affine fourth point and eight alternatives formed by changing horizontal and vertical edge lengths by ±10%.
 This fourth-point search also runs for V1, allowing perspective correction without an alignment pattern.
-Sampling reads one pixel at each module center; attempts containing out-of-image or nonfinite coordinates are discarded.
+The Center strategy reads one pixel at each module center; attempts containing out-of-image or nonfinite coordinates are discarded.
 
 Mirrors are decoded through the core's transpose retry after sampling.
 `corners` remain the projections of sampled-grid boundaries `(0,0)`, `(side,0)`, `(side,side)`, and `(0,side)` into the ROI.
@@ -68,7 +68,7 @@ Fixture coordinates, lighting formulas, and random seeds are recorded in `tools/
 
 ## Computational bounds and operational limits
 
-Scanning uses at most four passes; each local-threshold decision reads 26 pixels (one center read plus 25 window samples, including repeated/clamped coordinates).
+A stateless region scan uses at most four passes (a tracker frame can use eight); each local-threshold decision reads 26 pixels (one center read plus 25 window samples, including repeated/clamped coordinates).
 Alignment search for one detailed candidate examines at most 1089 positions × 25 modules; one matrix-sampling attempt visits at most 177×177 modules.
 A sampled matrix with a normal-orientation content error runs core decoding up to twice.
 Transposition requires no additional scratch, but failed input and mirrors can increase CPU time.
@@ -82,3 +82,57 @@ A difference from a reference algorithm alone is not treated as a standards viol
 Lens distortion, motion blur, strong reflections, missing finders, modules smaller than one pixel, inadequate quiet zones, and camera-specific noise require separate evaluation.
 The default local radius of 24 is not optimal for every module pitch; tune `local_radius` and `row_step` for the imaging system.
 Errors such as `FinderCapacity` can guide callers to increase budgets, narrow the ROI, or retry on the next frame.
+
+## Center fallback and frame state
+
+`CenterThenMajority5` uses the same homography and threshold/polarity as the
+failed center attempt. The five positions are `(x+0.5,y+0.5)` and its offsets
+`(-0.25,0)`, `(0.25,0)`, `(0,-0.25)`, `(0,0.25)` in module coordinates. Three
+of five dark votes select a dark module. All five are tested without a majority
+short circuit. Every input access, including duplicate pixel positions and the
+second center read, consumes the shared pixel budget. A module costs at most
+five global reads or 130 local reads in the fallback. Any nonfinite or out-of-image
+projection rejects that attempt; projected sample coordinates are never clamped
+or substituted from neighboring modules. The existing local threshold window
+still clamps its 25 threshold references. Center success adds no retries or reads.
+
+A tracker uses these transitions:
+
+| Previous state | Frame result | New state |
+| --- | --- | --- |
+| `Searching` | Success | `Tracking` with new hint |
+| `Searching` | Complete recognition failure with eligible geometry | `Candidate { misses: 1 }` |
+| `Searching` | Complete recognition failure without geometry | `Searching` |
+| `Tracking` | Complete recognition failure | `Candidate { misses: 1 }` |
+| `Candidate` | Success | `Tracking` with new hint |
+| `Candidate` | Second complete recognition failure | `Searching` |
+| Any | Validation, capacity, or budget error | Previous state unchanged |
+
+Saved rectangles are tried before the full input image. Ordinary recognition
+failure in the ROI triggers a full search during the same call; a ROI equal to
+the full image is searched once. `NotFound` and core format/version/content
+errors are recognition failures. `FinderCapacity`, candidate/retry/pixel budget
+exhaustion, and output/segment/scratch capacity failures leave state unchanged
+because the frame did not complete its bounded search. ROI and full-image
+min/max scans, finder passes, candidate checks, and sampling attempts share a
+single `Stats` and `PixelBudget`, without resetting limits between regions.
+
+Hints use the four projected symbol boundaries' bounding box. Each edge is
+expanded by the maximum of 25% of the longest projected edge, an estimate of
+four modules, and eight pixels, then rounded outward and clamped to the input
+bounds. Degenerate or nonfinite geometry produces no hint. Subregion corners
+are translated by the integer origin before returning or saving input coordinates.
+An unconfirmed candidate requires validated finder geometry/patterns, a complete
+module sample, and a core `ReedSolomon`, `Truncated`, `MalformedPayload`, or
+`UnsupportedMode` error after format/version validation. Format/version errors
+alone never produce candidates. The first eligible geometry in search order is
+retained, but any successful decode takes precedence. New unconfirmed geometry
+does not restart the two-frame expiry.
+
+Changed width or height prevents reuse of a saved hint. Stride changes preserve
+coordinates. A same-size change of crop origin, scale, or camera coordinate system
+requires caller `reset()`. Tracking supports neither camera acquisition, queues,
+async ownership, nor enumeration of multiple symbols. Five-point voting may
+help isolated center damage, but does not guarantee improvement for blur, very
+small modules, strong projection, or missed/decorated finder patterns. Extra
+fallback work can leave fewer geometries available under the same work budget.

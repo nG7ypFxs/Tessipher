@@ -101,10 +101,50 @@ impl<'a> GrayImage<'a> {
             None
         }
     }
+    /// Borrows a validated subregion, preserving the parent stride and requiring
+    /// no padding after its final row. Coordinates are relative to this image.
+    pub fn sub_roi(self, rect: Rect) -> Result<Self, Error> {
+        let right = rect.x.checked_add(rect.width).ok_or(Error::InvalidImage)?;
+        let bottom = rect.y.checked_add(rect.height).ok_or(Error::InvalidImage)?;
+        if rect.width == 0 || rect.height == 0 || right > self.width || bottom > self.height {
+            return Err(Error::InvalidImage);
+        }
+        let start = rect
+            .y
+            .checked_mul(self.stride)
+            .and_then(|n| n.checked_add(rect.x))
+            .ok_or(Error::InvalidImage)?;
+        Self::new(&self.data[start..], rect.width, rect.height, self.stride)
+    }
     fn at(self, x: usize, y: usize) -> u8 {
         self.data[y * self.stride + x]
     }
 }
+/// Integer rectangle relative to the input image's top-left pixel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rect {
+    /// Left coordinate in pixels.
+    pub x: usize,
+    /// Top coordinate in pixels.
+    pub y: usize,
+    /// Nonzero width in pixels.
+    pub width: usize,
+    /// Nonzero height in pixels.
+    pub height: usize,
+}
+
+/// Sampling policy for each candidate projection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SamplingStrategy {
+    /// Sample each module's center once (the legacy behavior).
+    #[default]
+    Center,
+    /// After a complete center sample fails core content decoding, retry with five
+    /// votes: the center and offsets of 0.25 module up, down, left, and right.
+    /// All five points are read, including repeated pixels; three dark votes win.
+    CenterThenMajority5,
+}
+
 /// Default maximum actual input pixel reads across a complete decode call.
 /// Independent of image dimensions; includes min/max, repeated and local reads.
 pub const DEFAULT_MAX_PIXEL_READS: usize = 64_000_000;
@@ -238,7 +278,7 @@ pub struct Stats {
     /// Matrix-sampling attempts, including geometrically rejected samples.
     /// A core transpose retry reuses one sample and does not increment this count.
     pub retries: usize,
-    /// Threshold/polarity passes entered (0..=4).
+    /// Threshold/polarity passes entered (0..=4, or 0..=8 for a tracker frame).
     pub passes: usize,
 }
 /// First successfully decoded symbol and the sampling geometry used to find it.
@@ -600,17 +640,47 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
     segments: &mut [Segment],
     stats: &mut Stats,
 ) -> Result<Detection, Error> {
+    decode_with_sampling(
+        image,
+        config,
+        SamplingStrategy::Center,
+        scratch,
+        core_scratch,
+        output,
+        segments,
+        stats,
+    )
+}
+/// Like [`decode_with_stats`], with an opt-in sampling policy.
+///
+/// A majority retry uses the same projection and threshold, consumes one retry,
+/// and shares all budgets. Geometry, input, capacity, and budget errors never
+/// trigger fallback. A center success performs no extra reads or retries.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_with_sampling<const W: usize, const H: usize>(
+    image: GrayImage<'_>,
+    config: &Config<W, H>,
+    strategy: SamplingStrategy,
+    scratch: &mut [u8],
+    core_scratch: &mut [u8],
+    output: &mut [u8],
+    segments: &mut [Segment],
+    stats: &mut Stats,
+) -> Result<Detection, Error> {
     *stats = Stats::default();
+    validate_input(image, config, scratch, core_scratch)?;
     let budget = PixelBudget::new(config.max_pixel_reads);
     let result = decode_inner(
         image,
         config,
+        strategy,
         scratch,
         core_scratch,
         output,
         segments,
         stats,
         &budget,
+        None,
     );
     stats.pixel_reads = budget.used.get();
     result.map(|mut found| {
@@ -618,17 +688,12 @@ pub fn decode_with_stats<const W: usize, const H: usize>(
         found
     })
 }
-#[allow(clippy::too_many_arguments)]
-fn decode_inner<const W: usize, const H: usize>(
+fn validate_input<const W: usize, const H: usize>(
     image: GrayImage<'_>,
     config: &Config<W, H>,
-    scratch: &mut [u8],
-    core_scratch: &mut [u8],
-    output: &mut [u8],
-    segments: &mut [Segment],
-    stats: &mut Stats,
-    budget: &PixelBudget,
-) -> Result<Detection, Error> {
+    scratch: &[u8],
+    core_scratch: &[u8],
+) -> Result<(), Error> {
     let needed = config.scratch_bytes()?;
     if image.width > W || image.height > H {
         return Err(Error::ImageTooLarge);
@@ -639,6 +704,21 @@ fn decode_inner<const W: usize, const H: usize>(
     if core_scratch.len() < qr_core::SCRATCH_BYTES {
         return Err(Error::Decode(qr_core::Error::ScratchTooSmall));
     }
+    Ok(())
+}
+#[allow(clippy::too_many_arguments)]
+fn decode_inner<const W: usize, const H: usize>(
+    image: GrayImage<'_>,
+    config: &Config<W, H>,
+    strategy: SamplingStrategy,
+    scratch: &mut [u8],
+    core_scratch: &mut [u8],
+    output: &mut [u8],
+    segments: &mut [Segment],
+    stats: &mut Stats,
+    budget: &PixelBudget,
+    candidate_hint: Option<&mut Option<([Point; 4], usize)>>,
+) -> Result<Detection, Error> {
     let (matrix, finders) = scratch.split_at_mut(MAX_MATRIX_BYTES);
     let mut min = 255u8;
     let mut max = 0u8;
@@ -663,6 +743,8 @@ fn decode_inner<const W: usize, const H: usize>(
         max_candidates: config.max_candidates,
         max_retries: config.max_retries,
         last_error: None,
+        strategy,
+        candidate_hint,
     };
     for pass in 0..4 {
         search.stats.passes += 1;
@@ -840,6 +922,8 @@ struct SearchContext<'a> {
     max_candidates: usize,
     max_retries: usize,
     last_error: Option<qr_core::Error>,
+    strategy: SamplingStrategy,
+    candidate_hint: Option<&'a mut Option<([Point; 4], usize)>>,
 }
 impl SearchContext<'_> {
     fn candidate(&mut self, bin: Binary<'_>, set: [Finder; 3]) -> Result<Option<Detection>, Error> {
@@ -970,6 +1054,27 @@ impl SearchContext<'_> {
         h: Homography,
         side: usize,
     ) -> Result<Option<Detection>, Error> {
+        if !self.sample::<false>(bin, h, side)? {
+            return Ok(None);
+        }
+        if let Some(found) = self.decode_sample(bin, h, side)? {
+            return Ok(Some(found));
+        }
+        if self.strategy == SamplingStrategy::CenterThenMajority5 {
+            if !self.sample::<true>(bin, h, side)? {
+                return Ok(None);
+            }
+            return self.decode_sample(bin, h, side);
+        }
+        Ok(None)
+    }
+
+    fn sample<const MAJORITY: bool>(
+        &mut self,
+        bin: Binary<'_>,
+        h: Homography,
+        side: usize,
+    ) -> Result<bool, Error> {
         if self.stats.retries >= self.max_retries {
             return Err(Error::RetryBudget);
         }
@@ -977,38 +1082,49 @@ impl SearchContext<'_> {
         self.matrix[..(side * side).div_ceil(8)].fill(0);
         for y in 0..side {
             for x in 0..side {
-                let Some(d) = bin.point(h.at(Point {
+                let p = Point {
                     x: x as f32 + 0.5,
                     y: y as f32 + 0.5,
-                }))?
-                else {
-                    return Ok(None);
                 };
-                if d {
+                let mut votes = 0;
+                let offsets = [
+                    (0.0, 0.0),
+                    (-0.25, 0.0),
+                    (0.25, 0.0),
+                    (0.0, -0.25),
+                    (0.0, 0.25),
+                ];
+                for &(dx, dy) in &offsets[..if MAJORITY { 5 } else { 1 }] {
+                    let Some(dark) = bin.point(h.at(Point {
+                        x: p.x + dx,
+                        y: p.y + dy,
+                    }))?
+                    else {
+                        return Ok(false);
+                    };
+                    votes += usize::from(dark);
+                }
+                if votes >= if MAJORITY { 3 } else { 1 } {
                     let i = y * side + x;
                     self.matrix[i / 8] |= 128 >> (i % 8);
                 }
             }
         }
+        Ok(true)
+    }
+
+    fn decode_sample(
+        &mut self,
+        bin: Binary<'_>,
+        h: Homography,
+        side: usize,
+    ) -> Result<Option<Detection>, Error> {
+        let corners = projection_corners(h, side);
         let m = Matrix::new(self.matrix, side).map_err(Error::Decode)?;
         match qr_core::decode(m, self.core_scratch, self.output, self.segments) {
             Ok(decoded) => Ok(Some(Detection {
                 decoded,
-                corners: [
-                    h.at(Point { x: 0.0, y: 0.0 }),
-                    h.at(Point {
-                        x: side as f32,
-                        y: 0.0,
-                    }),
-                    h.at(Point {
-                        x: side as f32,
-                        y: side as f32,
-                    }),
-                    h.at(Point {
-                        x: 0.0,
-                        y: side as f32,
-                    }),
-                ],
+                corners,
                 inverted: bin.inverted,
                 local_threshold: bin.local,
                 stats: *self.stats,
@@ -1019,11 +1135,305 @@ impl SearchContext<'_> {
                 | qr_core::Error::ScratchTooSmall),
             ) => Err(Error::Decode(e)),
             Err(e) => {
+                if candidate_content_error(e) {
+                    if let Some(hint) = self.candidate_hint.as_deref_mut() {
+                        if hint.is_none() && track_hint(corners, side, bin.image).is_some() {
+                            *hint = Some((corners, side));
+                        }
+                    }
+                }
                 self.last_error = Some(e);
                 Ok(None)
             }
         }
     }
+}
+
+fn projection_corners(h: Homography, side: usize) -> [Point; 4] {
+    let n = side as f32;
+    [
+        h.at(Point { x: 0.0, y: 0.0 }),
+        h.at(Point { x: n, y: 0.0 }),
+        h.at(Point { x: n, y: n }),
+        h.at(Point { x: 0.0, y: n }),
+    ]
+}
+fn candidate_content_error(e: qr_core::Error) -> bool {
+    matches!(
+        e,
+        qr_core::Error::ReedSolomon
+            | qr_core::Error::Truncated
+            | qr_core::Error::MalformedPayload
+            | qr_core::Error::UnsupportedMode
+    )
+}
+fn recognition_failure(e: Error) -> bool {
+    matches!(
+        e,
+        Error::NotFound
+            | Error::Decode(
+                qr_core::Error::Format
+                    | qr_core::Error::Version
+                    | qr_core::Error::ReedSolomon
+                    | qr_core::Error::Truncated
+                    | qr_core::Error::MalformedPayload
+                    | qr_core::Error::UnsupportedMode
+            )
+    )
+}
+
+/// A search hint, not proof that a QR symbol exists. It retains no image or payload.
+/// Coordinates refer to the complete image passed to [`Tracker::decode_with_stats`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrackHint {
+    /// Expanded, clamped search rectangle in input-image coordinates.
+    pub roi: Rect,
+    /// Width of the input image from which this hint was obtained.
+    pub image_width: usize,
+    /// Height of the input image from which this hint was obtained.
+    pub image_height: usize,
+}
+/// Frame-to-frame search state. Candidates expire after two complete frame misses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrackerState {
+    /// Search the whole input image.
+    #[default]
+    Searching,
+    /// An unconfirmed geometry or previous detection survived one frame miss.
+    Candidate {
+        /// Search rectangle; it does not confirm QR presence.
+        hint: TrackHint,
+        /// Consecutive completely searched frames without a decoded symbol.
+        misses: u8,
+    },
+    /// The previous frame successfully decoded at this location.
+    Tracking {
+        /// Expanded location of the successful symbol.
+        hint: TrackHint,
+    },
+}
+/// Frame counters; ROI and full-image searches share one instance and all budgets.
+pub type TrackerStats = Stats;
+
+/// Caller-owned, allocation-free tracker containing only geometry and state.
+///
+/// A saved ROI is searched first, followed by the full image in the same frame
+/// after ordinary recognition failure. A full-image ROI is never searched twice.
+/// Budget, validation, and capacity failures leave the previous state unchanged.
+/// Different image dimensions invalidate the saved hint for that call. For a new
+/// crop origin or scale with unchanged dimensions, the caller must call [`Self::reset`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Tracker {
+    state: TrackerState,
+}
+impl Tracker {
+    /// Creates a tracker in [`TrackerState::Searching`].
+    pub const fn new() -> Self {
+        Self {
+            state: TrackerState::Searching,
+        }
+    }
+    /// Restores a caller-saved state after validating its integer geometry.
+    ///
+    /// Candidate misses must be exactly one. Saved image dimensions must be
+    /// nonzero and at most 32768, with a nonempty rectangle entirely inside
+    /// those dimensions. Validation uses saved dimensions, so a later input
+    /// resize still follows the ordinary full-image search rule.
+    pub fn from_state(state: TrackerState) -> Result<Self, Error> {
+        let hint = match state {
+            TrackerState::Searching => return Ok(Self::new()),
+            TrackerState::Candidate { hint, misses: 1 } | TrackerState::Tracking { hint } => hint,
+            TrackerState::Candidate { .. } => return Err(Error::InvalidConfig),
+        };
+        if hint.image_width == 0
+            || hint.image_height == 0
+            || hint.image_width > 32768
+            || hint.image_height > 32768
+            || hint.roi.width == 0
+            || hint.roi.height == 0
+            || hint
+                .roi
+                .x
+                .checked_add(hint.roi.width)
+                .is_none_or(|right| right > hint.image_width)
+            || hint
+                .roi
+                .y
+                .checked_add(hint.roi.height)
+                .is_none_or(|bottom| bottom > hint.image_height)
+        {
+            return Err(Error::InvalidImage);
+        }
+        Ok(Self { state })
+    }
+    /// Discards previous geometry and starts a full-image search next frame.
+    pub fn reset(&mut self) {
+        self.state = TrackerState::Searching;
+    }
+    /// Returns the current state and integer search geometry.
+    pub const fn state(&self) -> TrackerState {
+        self.state
+    }
+
+    /// Decodes one frame with caller-owned buffers and cumulative frame counters.
+    ///
+    /// Bounds and buffer requirements are validated against the complete input
+    /// before selecting a ROI. Returned corners use input-image coordinates.
+    /// A successful decode enters `Tracking`; a first complete miss enters
+    /// `Candidate` when a hint exists; a second enters `Searching`. A new failed
+    /// candidate cannot reset the miss count. Only a complete recognition failure
+    /// or success commits state. Failure buffer contents are unspecified.
+    #[allow(clippy::too_many_arguments)]
+    pub fn decode_with_stats<const W: usize, const H: usize>(
+        &mut self,
+        image: GrayImage<'_>,
+        config: &Config<W, H>,
+        strategy: SamplingStrategy,
+        scratch: &mut [u8],
+        core_scratch: &mut [u8],
+        output: &mut [u8],
+        segments: &mut [Segment],
+        stats: &mut TrackerStats,
+    ) -> Result<Detection, Error> {
+        *stats = Stats::default();
+        validate_input(image, config, scratch, core_scratch)?;
+        let previous = match self.state {
+            TrackerState::Candidate { hint, .. } | TrackerState::Tracking { hint }
+                if hint.image_width != image.width || hint.image_height != image.height =>
+            {
+                TrackerState::Searching
+            }
+            state => state,
+        };
+        let saved = match previous {
+            TrackerState::Searching => None,
+            TrackerState::Candidate { hint, .. } | TrackerState::Tracking { hint } => Some(hint),
+        };
+        let full = Rect {
+            x: 0,
+            y: 0,
+            width: image.width,
+            height: image.height,
+        };
+        let budget = PixelBudget::new(config.max_pixel_reads);
+        let mut candidate = None;
+        // This closure reborrows every buffer but retains one frame's counters/budget.
+        let mut run = |rect: Rect| {
+            let region = image.sub_roi(rect)?;
+            let mut geometry = None;
+            let result = decode_inner(
+                region,
+                config,
+                strategy,
+                scratch,
+                core_scratch,
+                output,
+                segments,
+                stats,
+                &budget,
+                Some(&mut geometry),
+            );
+            let translate = |mut corners: [Point; 4]| {
+                for p in &mut corners {
+                    p.x += rect.x as f32;
+                    p.y += rect.y as f32;
+                }
+                corners
+            };
+            if candidate.is_none() {
+                if let Some((corners, side)) = geometry {
+                    candidate = track_hint(translate(corners), side, image);
+                }
+            }
+            result.map(|mut found| {
+                found.corners = translate(found.corners);
+                found
+            })
+        };
+        let result = if let Some(hint) = saved.filter(|h| h.roi != full) {
+            match run(hint.roi) {
+                Err(e) if recognition_failure(e) => run(full),
+                result => result,
+            }
+        } else {
+            run(full)
+        };
+        stats.pixel_reads = budget.used.get();
+        match result {
+            Ok(mut found) => {
+                found.stats = *stats;
+                self.state = match track_hint(
+                    found.corners,
+                    found.decoded.version as usize * 4 + 17,
+                    image,
+                ) {
+                    Some(hint) => TrackerState::Tracking { hint },
+                    None => TrackerState::Searching,
+                };
+                Ok(found)
+            }
+            Err(e) if recognition_failure(e) => {
+                self.state = match previous {
+                    TrackerState::Candidate { .. } => TrackerState::Searching,
+                    _ => match candidate.or(saved) {
+                        Some(hint) => TrackerState::Candidate { hint, misses: 1 },
+                        None => TrackerState::Searching,
+                    },
+                };
+                Err(e)
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+fn track_hint(corners: [Point; 4], side: usize, image: GrayImage<'_>) -> Option<TrackHint> {
+    if corners.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
+        return None;
+    }
+    let mut min = corners[0];
+    let mut max = corners[0];
+    let mut edge = 0.0f32;
+    let mut area = 0.0f32;
+    for i in 0..4 {
+        min.x = min.x.min(corners[i].x);
+        min.y = min.y.min(corners[i].y);
+        max.x = max.x.max(corners[i].x);
+        max.y = max.y.max(corners[i].y);
+        let next = corners[(i + 1) % 4];
+        edge = edge.max(next.sub(corners[i]).norm());
+        area += corners[i].cross(next);
+    }
+    if !edge.is_finite()
+        || !area.is_finite()
+        || area.abs() < 1.0
+        || max.x <= min.x
+        || max.y <= min.y
+        || side == 0
+    {
+        return None;
+    }
+    let margin = (edge * 0.25).max(edge * 4.0 / side as f32).max(8.0);
+    let x = (min.x - margin).clamp(0.0, image.width as f32) as usize;
+    let y = (min.y - margin).clamp(0.0, image.height as f32) as usize;
+    let ceil = |n: f32| {
+        let i = n as usize;
+        i + usize::from(n > i as f32)
+    };
+    let right = ceil((max.x + margin).clamp(0.0, image.width as f32));
+    let bottom = ceil((max.y + margin).clamp(0.0, image.height as f32));
+    if right <= x || bottom <= y {
+        return None;
+    }
+    Some(TrackHint {
+        roi: Rect {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        },
+        image_width: image.width,
+        image_height: image.height,
+    })
 }
 
 fn finder_pattern(bin: Binary<'_>, center: Point, u: Point, v: Point) -> Result<bool, Error> {
@@ -1106,6 +1516,8 @@ mod tests {
             max_candidates: 1,
             max_retries: 2,
             last_error: Some(qr_core::Error::Version),
+            strategy: SamplingStrategy::CenterThenMajority5,
+            candidate_hint: None,
         };
         // The first sampled point lies outside the image.
         let outside = Homography([1.0, 0.0, -10.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
@@ -1223,6 +1635,8 @@ mod tests {
                 max_candidates: 1,
                 max_retries: 2,
                 last_error: Some(qr_core::Error::Version),
+                strategy: SamplingStrategy::Center,
+                candidate_hint: None,
             };
             assert_eq!(search.attempt(bin, h, 21), Err(Error::PixelBudget));
             assert_eq!(search.last_error, Some(qr_core::Error::Version));
@@ -1264,11 +1678,201 @@ mod tests {
             max_candidates: 1,
             max_retries: 2,
             last_error: Some(qr_core::Error::Version),
+            strategy: SamplingStrategy::Center,
+            candidate_hint: None,
         };
         assert_eq!(search.candidate(bin, finders), Err(Error::PixelBudget));
         assert_eq!(budget.used.get(), 148);
         assert_eq!(search.stats.candidates, 1);
         assert_eq!(search.stats.retries, 0);
         assert_eq!(search.last_error, Some(qr_core::Error::Version));
+    }
+    #[test]
+    fn five_votes_charge_duplicates_all_reads_and_partial_local_decisions() {
+        let image = GrayImage::new(&[0], 1, 1, 1).unwrap();
+        // Every projection maps to the same pixel; duplicates must still be read.
+        let h = Homography([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        for local in [false, true] {
+            let total = 21 * 21 * 5 * if local { 26 } else { 1 };
+            for limit in [1, 25, 26, 129, 130, total - 1, total] {
+                let budget = PixelBudget::new(limit);
+                let bin = test_binary(image, &budget, local);
+                let mut matrix = [0; MAX_MATRIX_BYTES];
+                let mut cs = [0; qr_core::SCRATCH_BYTES];
+                let mut stats = Stats::default();
+                let mut search = SearchContext {
+                    matrix: &mut matrix,
+                    core_scratch: &mut cs,
+                    output: &mut [],
+                    segments: &mut [],
+                    stats: &mut stats,
+                    max_candidates: 1,
+                    max_retries: 1,
+                    last_error: None,
+                    strategy: SamplingStrategy::CenterThenMajority5,
+                    candidate_hint: None,
+                };
+                assert_eq!(
+                    search.sample::<true>(bin, h, 21),
+                    if limit < total {
+                        Err(Error::PixelBudget)
+                    } else {
+                        Ok(true)
+                    }
+                );
+                assert_eq!(budget.used.get(), limit.min(total));
+                assert_eq!(search.stats.retries, 1);
+                assert_eq!(search.last_error, None);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_projection_rejects_majority_without_clamping() {
+        let image = GrayImage::new(&[0; 21 * 21], 21, 21, 21).unwrap();
+        for h in [
+            Homography([0.6, 0.0, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]),
+            Homography([f32::NAN, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        ] {
+            let budget = PixelBudget::new(10000);
+            let mut matrix = [0; MAX_MATRIX_BYTES];
+            let mut cs = [0; qr_core::SCRATCH_BYTES];
+            let mut stats = Stats::default();
+            let mut search = SearchContext {
+                matrix: &mut matrix,
+                core_scratch: &mut cs,
+                output: &mut [],
+                segments: &mut [],
+                stats: &mut stats,
+                max_candidates: 1,
+                max_retries: 2,
+                last_error: None,
+                strategy: SamplingStrategy::CenterThenMajority5,
+                candidate_hint: None,
+            };
+            assert_eq!(
+                search.sample::<true>(test_binary(image, &budget, false), h, 21),
+                Ok(false)
+            );
+            assert_eq!(budget.used.get(), if h.0[0].is_nan() { 0 } else { 1 });
+            assert_eq!(search.stats.retries, 1);
+        }
+        assert!(track_hint([Point { x: 1.0, y: 1.0 }; 4], 21, image).is_none());
+        assert!(track_hint(
+            [Point {
+                x: f32::INFINITY,
+                y: 1.0
+            }; 4],
+            21,
+            image
+        )
+        .is_none());
+        for error in [
+            qr_core::Error::Format,
+            qr_core::Error::Version,
+            qr_core::Error::InvalidMatrix,
+        ] {
+            assert!(!candidate_content_error(error));
+        }
+    }
+    #[test]
+    fn every_tracker_state_preserves_itself_on_terminal_errors() {
+        let file = include_bytes!("../../../fixtures/v1.pgm");
+        let offset = file
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b == b'\n')
+            .nth(2)
+            .unwrap()
+            .0
+            + 1;
+        let image = GrayImage::new(&file[offset..], 145, 145, 145).unwrap();
+        let hint = TrackHint {
+            roi: Rect {
+                x: 0,
+                y: 0,
+                width: 145,
+                height: 145,
+            },
+            image_width: 145,
+            image_height: 145,
+        };
+        let config = DefaultConfig::default();
+        let mut ds = [0; MAX_MATRIX_BYTES + 32 * FINDER_BYTES];
+        let mut cs = [0; qr_core::SCRATCH_BYTES];
+        let mut output = [0; 16];
+        let mut segments = [Segment::EMPTY; 4];
+        for state in [
+            TrackerState::Searching,
+            TrackerState::Candidate { hint, misses: 1 },
+            TrackerState::Tracking { hint },
+        ] {
+            let mut tracker = Tracker { state };
+            let mut stats = Stats::default();
+            let small = DefaultConfig {
+                max_pixel_reads: 1,
+                ..config
+            };
+            assert_eq!(
+                tracker.decode_with_stats(
+                    image,
+                    &small,
+                    SamplingStrategy::CenterThenMajority5,
+                    &mut ds,
+                    &mut cs,
+                    &mut output,
+                    &mut segments,
+                    &mut stats
+                ),
+                Err(Error::PixelBudget)
+            );
+            assert_eq!(tracker.state(), state);
+            assert_eq!(stats.pixel_reads, 1);
+            assert_eq!(
+                tracker.decode_with_stats(
+                    image,
+                    &config,
+                    SamplingStrategy::CenterThenMajority5,
+                    &mut [],
+                    &mut cs,
+                    &mut output,
+                    &mut segments,
+                    &mut stats
+                ),
+                Err(Error::ScratchTooSmall)
+            );
+            assert_eq!(tracker.state(), state);
+            assert_eq!(stats, Stats::default());
+            assert_eq!(
+                tracker.decode_with_stats(
+                    image,
+                    &config,
+                    SamplingStrategy::CenterThenMajority5,
+                    &mut ds,
+                    &mut cs,
+                    &mut [],
+                    &mut segments,
+                    &mut stats
+                ),
+                Err(Error::Decode(qr_core::Error::OutputTooSmall))
+            );
+            assert_eq!(tracker.state(), state);
+            assert_eq!(stats.retries, 1);
+            assert_eq!(
+                tracker.decode_with_stats(
+                    image,
+                    &config,
+                    SamplingStrategy::CenterThenMajority5,
+                    &mut ds,
+                    &mut cs,
+                    &mut output,
+                    &mut [],
+                    &mut stats
+                ),
+                Err(Error::Decode(qr_core::Error::SegmentsTooSmall))
+            );
+            assert_eq!(tracker.state(), state);
+            assert_eq!(stats.retries, 1);
+        }
     }
 }

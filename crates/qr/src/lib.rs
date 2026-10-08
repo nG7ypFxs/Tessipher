@@ -29,7 +29,11 @@
 pub use qr_core as core;
 pub use qr_core::{decode as decode_matrix, Decoded, Matrix, Segment};
 pub use qr_detect as detect;
-pub use qr_detect::{decode as decode_gray, Config, DefaultConfig, Detection, GrayImage};
+pub use qr_detect::{
+    decode as decode_gray, decode_with_sampling as decode_gray_with_sampling,
+    decode_with_stats as decode_gray_with_stats, Config, DefaultConfig, Detection, GrayImage, Rect,
+    SamplingStrategy, Stats, TrackHint, Tracker, TrackerState, TrackerStats,
+};
 /// Scratch requirements are independent of configured image dimensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryRequirements {

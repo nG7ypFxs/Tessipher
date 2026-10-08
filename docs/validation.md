@@ -324,3 +324,58 @@ No unresolved implementation defect remains from the confirmed findings in this 
 The chapter 12 reference decoding algorithm's BCH-copy selection and alignment-grid approach do not require replacing the existing implementation.
 Micro QR, Model 1, encoding, ECI charset/transformation application, Structured Append joining, and chapter 14 transmission formatting remain outside the library's current raw-payload scope.
 This correction does not establish certification or completeness of all standard requirements, and previously recorded real-image recognition and MCU stack measurements remain outstanding.
+
+## Opt-in five-point sampling and ROI tracking (2026-10-08)
+
+Added Rust-only sampling and caller-owned tracking, preserving `Config`, `Stats`,
+`Detection`, scratch requirements, legacy entry points, and C ABI layout.
+The detector unit suite now includes five-vote duplicate-read charging, partial
+local decisions, exact budgets, invalid projections, and transactional terminal
+errors in all tracker states. Six tracking integration tests exercise normal,
+mirrored, inverted, perspective, and local-threshold decoding; center damage;
+ROI origins and padded strides; same-frame full recovery; candidate expiry;
+reset/dimension changes; full-ROI deduplication; and shared ROI/full budgets.
+The no-allocation test includes actual majority fallback, ROI success, full-image
+recovery, and candidate expiry, with all input/buffers allocated before counting.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --workspace --locked` | Passed |
+| `cargo test --workspace --release --locked` | Passed |
+| `cargo +1.85 test --workspace --locked` | Passed on Rust 1.85.1 |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Passed |
+| `RUSTDOCFLAGS='-D warnings -D missing_docs' cargo doc --workspace --no-deps --locked` | Passed |
+| `python3 tools/check_header.py` | Generated/bundled headers unchanged and matching |
+| `cargo build -p qr-ffi --release --locked` then `python3 tools/c_smoke.py` | Passed; core7077/detector4557/alignment1 |
+| `cargo build -p qr-core --target thumbv6m-none-eabi --release --locked` | Passed |
+| `cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release --locked` | Passed |
+| `cargo check -p qr --target wasm32-unknown-unknown --locked` | Passed |
+| `cargo run -p qr --example fuzz_smoke --release` | 20,000 payload / 10,000 matrix / 200 image cases; no panics |
+
+On aarch64 macOS, `size_of::<Tracker>()` is 56 bytes, independent of image size.
+A public `TEST` V1 symbol occupying 84×84 pixels in a 400×300 frame uses 246,372
+reads for the first frame and 38,796 for its stable tracked ROI (84.3% fewer).
+A V1 center-damage synthetic frame fails with the default center strategy after
+3,903,291 reads / 18 retries; the first projection's majority fallback succeeds
+with 135,976 reads / 2 retries. A center-only one-retry configuration fails while
+a two-retry majority configuration succeeds. Existing center-success counters
+remain identical for the opt-in API, including mirrored one-retry decoding.
+
+The legacy host benchmark retains exactly 934,433 reads / 1 candidate / 1 retry /
+1 pass for normal 640×640, and 30,084,436 reads / 60 retries / 4 passes for the
+undecodable frame. One host run measured medians of 2,041 μs and 34,637 μs,
+respectively; host timing varies and does not establish MCU worst-case cycles.
+Pixel reads and fixed tracker storage are the primary reproducible measures.
+
+Private photo checks used temporary PGM inputs outside the repository. No input
+photos, payload bytes, URLs, or credentials were stored in the repository or test
+fixtures, and no decoded URL was accessed. Photo 2's 384×384 ROI changes from
+center `ReedSolomon` failure (11,347,294 reads / 20 retries / 4 passes) to majority
+success (354,854 reads / 2 retries / 1 pass); its next tracked frame uses 239,500
+reads. Photo 1 at 640 and photo 2 at 640/512/256 preserve successful center work
+counts and reduce reads on the next tracked frame. Photo 3 at 640 remains
+`NotFound` with zero sampling retries for both strategies because no candidate
+reaches module sampling. These examples do not guarantee blur, low-resolution,
+perspective, or decorated-finder recognition. No MCU stack/cycle measurements
+were performed. Existing FNC1 changes and their independent fixtures remain intact.

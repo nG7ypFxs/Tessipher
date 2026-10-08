@@ -65,13 +65,18 @@ See [memory and decoding APIs](docs/api.md) for output contracts and errors.
 
 ## Build and validation
 
+Use [uv](https://docs.astral.sh/uv/getting-started/installation/) for the C checks.
+`uv run` installs the pinned formatter automatically using the scripts' inline
+dependencies; no manual virtual environment or pip installation is needed.
+
 ```sh
 cargo doc --workspace --no-deps --locked
 cargo test --workspace
 cargo test --workspace --release
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
-python3 tools/c_smoke.py
+uv run tools/c_format.py --check
+uv run tools/c_smoke.py
 python3 tools/cross_decode.py
 cargo run -p qr --example fuzz_smoke --release
 cargo run -p qr --example bench --release
@@ -83,7 +88,15 @@ The examples in the crate documentation run as doctests; CI also rejects undocum
 The validation fixtures include 1280 Nayuki-generated matrices and an independent set of 24 mode/version-boundary matrices generated with Segno 1.6.6.
 
 The C header is included at [include/tessipher.h](include/tessipher.h).
-`tools/check_header.py` compares it with the header generated from the ABI schema.
+`tools/check_header.py` compares it with the ABI-schema-generated header after
+formatting with clang-format 20.1.8 and the root `.clang-format` configuration.
+The C style uses four spaces, a 100-column limit, and preserves include order.
+Run `uv run tools/c_format.py --write` to format repository-owned `.c` and `.h`
+files (including untracked examples; vendor and build directories are excluded).
+After schema or prototype changes, regenerate the bundled header with
+`uv run tools/check_header.py --write`. `CLANG_FORMAT` can select an executable;
+the scripts reject versions other than the pinned version. Ordinary Cargo builds
+do not require clang-format.
 See [C ABI](docs/ffi.md) for Cortex-M commands and pointer contracts, and the [validation record](docs/validation.md) for completed checks.
 
 The standard editions checked for this project are ISO/IEC 18004:2024 (fourth edition) and the corresponding JIS X 0510:2026.

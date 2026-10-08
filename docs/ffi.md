@@ -2,11 +2,27 @@
 
 ## Building and headers
 
+Use [uv](https://docs.astral.sh/uv/getting-started/installation/) for header validation
+and host C smoke tests. The scripts declare clang-format 20.1.8 as an inline
+dependency, so `uv run` installs it automatically without manual venv/pip setup:
+
+```sh
+uv run tools/c_format.py --check
+# Apply formatting when editing C sources or headers:
+uv run tools/c_format.py --write
+```
+
+The root `.clang-format` uses four spaces and a 100-column limit while preserving
+include order and wrapping long comments. The formatter includes tracked and untracked
+nonignored `.c` and `.h` files, excluding vendor and build directories.
+Set `CLANG_FORMAT` to a specific executable if needed; its version must match
+the pin. CI uses uv with the same inline dependencies for host checks.
+
 ```sh
 # Static library for host C tests
-cargo build -p qr-ffi --release
-python3 tools/check_header.py
-python3 tools/c_smoke.py
+cargo build -p qr-ffi --release --locked
+uv run tools/check_header.py
+uv run tools/c_smoke.py
 
 # Cortex-M0 core and Cortex-M4 soft-float C library
 rustup target add thumbv6m-none-eabi thumbv7em-none-eabi
@@ -26,8 +42,12 @@ The header does not hard-code dimensions; `qr_memory` returns the limits of the 
 The C ABI version is 1, and the maximum module-matrix side is 177.
 
 ABI structs and their field documentation are shared in `crates/qr-ffi/abi_schema.rs`, which generates both Rust types and C declarations.
-`build.rs` emits `tessipher.h` into OUT_DIR; `tools/check_header.py` checks the bundled copy.
-After intentional changes to the schema or header documentation, update the bundled copy with `python3 tools/check_header.py --write`.
+`build.rs` emits a raw `tessipher.h` into OUT_DIR without invoking clang-format;
+ordinary Cargo builds do not need the formatter.
+`tools/check_header.py` formats that raw header using the root configuration before
+comparing it byte-for-byte with the distributed `include/tessipher.h`.
+The raw and distributed headers have the same declarations; their whitespace differs.
+After intentional changes to the schema or header documentation, update the bundled copy with `uv run tools/check_header.py --write`.
 C declarations and an executable check are demonstrated in `examples/c_smoke.c`.
 
 ## Calling sequence

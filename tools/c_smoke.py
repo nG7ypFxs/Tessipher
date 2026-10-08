@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
 import os,pathlib, subprocess, platform
 root=pathlib.Path(__file__).resolve().parents[1]
 target=pathlib.Path(os.environ.get('CARGO_TARGET_DIR',root/'target'))
 if not target.is_absolute(): target=root/target
-subprocess.run(['python3','tools/check_header.py'],cwd=root,check=True)
+subprocess.run(['uv','run','tools/check_header.py'],cwd=root,check=True)
 libs=['-lpthread','-lm']
 if platform.system()=='Darwin': libs+=['-framework','Security','-framework','CoreFoundation','-liconv']
 else: libs+=['-ldl']

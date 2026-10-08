@@ -1,39 +1,61 @@
 /* Integer return/metadata constants; function ABI uses fixed-width integer types. */
 enum qr_status {
-    QR_OK = 0, QR_INVALID_ARGUMENT = 1, QR_OVERLAP = 2,
-    QR_INVALID_IMAGE = 10, QR_IMAGE_TOO_LARGE = 11, QR_INVALID_CONFIG = 12,
-    QR_DETECTOR_SCRATCH_TOO_SMALL = 13, QR_FINDER_CAPACITY = 14,
-    QR_CANDIDATE_BUDGET = 15, QR_RETRY_BUDGET = 16, QR_NOT_FOUND = 17, QR_PIXEL_BUDGET = 18,
-    QR_INVALID_MATRIX = 101, QR_CORE_SCRATCH_TOO_SMALL = 102, QR_FORMAT = 103,
-    QR_VERSION = 104, QR_REED_SOLOMON = 105, QR_TRUNCATED = 106,
-    QR_UNSUPPORTED_MODE = 107, QR_MALFORMED_PAYLOAD = 108,
-    QR_OUTPUT_TOO_SMALL = 109, QR_SEGMENTS_TOO_SMALL = 110
+    QR_OK = 0,
+    QR_INVALID_ARGUMENT = 1,
+    QR_OVERLAP = 2,
+    QR_INVALID_IMAGE = 10,
+    QR_IMAGE_TOO_LARGE = 11,
+    QR_INVALID_CONFIG = 12,
+    QR_DETECTOR_SCRATCH_TOO_SMALL = 13,
+    QR_FINDER_CAPACITY = 14,
+    QR_CANDIDATE_BUDGET = 15,
+    QR_RETRY_BUDGET = 16,
+    QR_NOT_FOUND = 17,
+    QR_PIXEL_BUDGET = 18,
+    QR_INVALID_MATRIX = 101,
+    QR_CORE_SCRATCH_TOO_SMALL = 102,
+    QR_FORMAT = 103,
+    QR_VERSION = 104,
+    QR_REED_SOLOMON = 105,
+    QR_TRUNCATED = 106,
+    QR_UNSUPPORTED_MODE = 107,
+    QR_MALFORMED_PAYLOAD = 108,
+    QR_OUTPUT_TOO_SMALL = 109,
+    QR_SEGMENTS_TOO_SMALL = 110
 };
-enum qr_ec_level { QR_EC_L = 0, QR_EC_M = 1, QR_EC_Q = 2, QR_EC_H = 3 };
+enum qr_ec_level {
+    QR_EC_L = 0,
+    QR_EC_M = 1,
+    QR_EC_Q = 2,
+    QR_EC_H = 3
+};
 enum qr_mode {
-    QR_NUMERIC = 1, QR_ALPHANUMERIC = 2, QR_STRUCTURED_APPEND = 3,
-    QR_BYTE = 4, QR_FNC1_FIRST = 5, QR_ECI = 7, QR_KANJI = 8, QR_FNC1_SECOND = 9
+    QR_NUMERIC = 1,
+    QR_ALPHANUMERIC = 2,
+    QR_STRUCTURED_APPEND = 3,
+    QR_BYTE = 4,
+    QR_FNC1_FIRST = 5,
+    QR_ECI = 7,
+    QR_KANJI = 8,
+    QR_FNC1_SECOND = 9
 };
 /* Status: 0 success; 1 invalid numeric pointer/length/alignment argument;
  * 2 overlapping buffers; 10 invalid image; 11 image too large; 12 invalid config;
  * 13 detector scratch shortage; 14 finder capacity; 15 candidate budget;
- * 16 retry budget; 17 no symbol; 18 pixel-read budget; 101..110 core errors in qr_core::Error order.
- * ECC values: 0=L, 1=M, 2=Q, 3=H. Mode values are QR mode indicator numbers.
- * FNC1: 0=none, 1=first, 2=second. SA index is zero based, total is 1..16.
- * qr_segment.eci is the last ECI number encountered, initially 3, not an active set.
- * ECI control segments retain every assignment in order for caller interpretation.
- * No charset, encryption, or compression transformation is performed.
- * Each nonempty span must lie in one live allocation, aligned for its type.
- * All nonempty spans, including inputs, must be mutually disjoint.
- * Inputs/config are initialized and unchanged for the duration of the call.
- * Pointer contracts: see docs/ffi.md. Scratch/payload/segment/result outputs
- * must be exclusive writable allocations, disjoint from all input and each other.
- * Null is allowed only for zero-length byte/segment spans. Config/result are mandatory.
- * Matrix bits are packed row-major, MSB first, without row padding.
- * Output storage need not be initialized; no concurrent access is permitted.
- * Numeric checks cannot prove allocation size, validity, lifetime, or exclusivity.
- * On error output buffers are unspecified; result is written only on success.
- * Read only result.payload_len bytes and result.segment_count entries on success.
+ * 16 retry budget; 17 no symbol; 18 pixel-read budget; 101..110 core errors in qr_core::Error
+ * order. ECC values: 0=L, 1=M, 2=Q, 3=H. Mode values are QR mode indicator numbers. FNC1: 0=none,
+ * 1=first, 2=second. SA index is zero based, total is 1..16. qr_segment.eci is the last ECI number
+ * encountered, initially 3, not an active set. ECI control segments retain every assignment in
+ * order for caller interpretation. No charset, encryption, or compression transformation is
+ * performed. Each nonempty span must lie in one live allocation, aligned for its type. All nonempty
+ * spans, including inputs, must be mutually disjoint. Inputs/config are initialized and unchanged
+ * for the duration of the call. Pointer contracts: see docs/ffi.md. Scratch/payload/segment/result
+ * outputs must be exclusive writable allocations, disjoint from all input and each other. Null is
+ * allowed only for zero-length byte/segment spans. Config/result are mandatory. Matrix bits are
+ * packed row-major, MSB first, without row padding. Output storage need not be initialized; no
+ * concurrent access is permitted. Numeric checks cannot prove allocation size, validity, lifetime,
+ * or exclusivity. On error output buffers are unspecified; result is written only on success. Read
+ * only result.payload_len bytes and result.segment_count entries on success.
  */
 /* Writes defaults: finders32/candidates4096/retries256/row_step1/local_radius24.
  * Returns QR_OK or QR_INVALID_ARGUMENT. out is mandatory and exclusively writable. */
@@ -47,9 +69,9 @@ int32_t qr_memory(const qr_config *config, qr_memory_info *out);
  * Scratch requires qr_memory_info.core_scratch_bytes; segment_capacity <= max_segments.
  * Returns QR_OK, QR_INVALID_ARGUMENT, QR_OVERLAP, or a core error (101..110).
  * Detection-only result fields are zero. */
-int32_t qr_decode_matrix(const uint8_t *bits, size_t bits_len, size_t side,
-    uint8_t *scratch, size_t scratch_len, uint8_t *payload, size_t payload_len,
-    qr_segment *segments, size_t segment_capacity, qr_result *result);
+int32_t qr_decode_matrix(const uint8_t *bits, size_t bits_len, size_t side, uint8_t *scratch,
+                         size_t scratch_len, uint8_t *payload, size_t payload_len,
+                         qr_segment *segments, size_t segment_capacity, qr_result *result);
 /* Decodes the first symbol in a Gray8 ROI; pixels starts at the ROI top-left.
  * Nonzero width/height, stride >= width, and (height-1)*stride+width bytes are required.
  * Last-row trailing padding is unnecessary; input is never copied.
@@ -58,11 +80,11 @@ int32_t qr_decode_matrix(const uint8_t *bits, size_t bits_len, size_t side,
  * Corner order follows sampled-grid (0,0)/(side,0)/(side,side)/(0,side) even after transpose.
  * Coordinates are ROI-relative; there is no mirrored flag.
  * Uses a finite limit of 64000000 actual input pixel reads shared across the call. */
-int32_t qr_decode_gray(const qr_config *config,
-    const uint8_t *pixels, size_t pixels_len, size_t width, size_t height, size_t stride,
-    uint8_t *detector_scratch, size_t detector_scratch_len,
-    uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,
-    qr_segment *segments, size_t segment_capacity, qr_result *result);
+int32_t qr_decode_gray(const qr_config *config, const uint8_t *pixels, size_t pixels_len,
+                       size_t width, size_t height, size_t stride, uint8_t *detector_scratch,
+                       size_t detector_scratch_len, uint8_t *core_scratch, size_t core_scratch_len,
+                       uint8_t *payload, size_t payload_len, qr_segment *segments,
+                       size_t segment_capacity, qr_result *result);
 
 /* Same pointer, buffer, result and error contract as qr_decode_gray.
  * max_pixel_reads is 1..SIZE_MAX; zero returns QR_INVALID_CONFIG.
@@ -72,10 +94,12 @@ int32_t qr_decode_gray(const qr_config *config,
  * The limit bounds pixel work, not total cycles or caller-buffer initialization.
  * The ABI-1 qr_config/qr_result/qr_memory_info layouts are unchanged. */
 int32_t qr_decode_gray_with_budget(const qr_config *config, size_t max_pixel_reads,
-    const uint8_t *pixels, size_t pixels_len, size_t width, size_t height, size_t stride,
-    uint8_t *detector_scratch, size_t detector_scratch_len,
-    uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,
-    qr_segment *segments, size_t segment_capacity, qr_result *result);
+                                   const uint8_t *pixels, size_t pixels_len, size_t width,
+                                   size_t height, size_t stride, uint8_t *detector_scratch,
+                                   size_t detector_scratch_len, uint8_t *core_scratch,
+                                   size_t core_scratch_len, uint8_t *payload, size_t payload_len,
+                                   qr_segment *segments, size_t segment_capacity,
+                                   qr_result *result);
 
 /* Sampling arguments are uint32_t; unknown values return QR_INVALID_CONFIG.
  * Existing Gray8 entry points use QR_DEFAULT_SAMPLING_STRATEGY; no hidden tracking.
@@ -85,7 +109,11 @@ enum qr_sampling_strategy {
     QR_SAMPLING_CENTER_THEN_MAJORITY5 = 1,
     QR_DEFAULT_SAMPLING_STRATEGY = QR_SAMPLING_CENTER_THEN_MAJORITY5
 };
-enum qr_tracker_tag { QR_TRACKER_SEARCHING = 0, QR_TRACKER_CANDIDATE = 1, QR_TRACKER_TRACKING = 2 };
+enum qr_tracker_tag {
+    QR_TRACKER_SEARCHING = 0,
+    QR_TRACKER_CANDIDATE = 1,
+    QR_TRACKER_TRACKING = 2
+};
 /* New layout query; qr_memory_info and ABI version 1 are unchanged. */
 int32_t qr_tracker_memory(qr_tracker_memory_info *out);
 /* Write-only initialization/reset to canonical all-zero Searching.
@@ -99,25 +127,28 @@ int32_t qr_tracker_reset(qr_tracker *out);
  * configuration, state or image rejection leaves stats untouched. Result is success-only.
  * Five-point fallback costs a retry and up to 5 global or 130 local reads per module. */
 int32_t qr_decode_gray_with_sampling(const qr_config *config, size_t max_pixel_reads,
-    uint32_t strategy, const uint8_t *pixels, size_t pixels_len,
-    size_t width, size_t height, size_t stride,
-    uint8_t *detector_scratch, size_t detector_scratch_len,
-    uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,
-    qr_segment *segments, size_t segment_capacity, qr_result *result, qr_stats *stats);
+                                     uint32_t strategy, const uint8_t *pixels, size_t pixels_len,
+                                     size_t width, size_t height, size_t stride,
+                                     uint8_t *detector_scratch, size_t detector_scratch_len,
+                                     uint8_t *core_scratch, size_t core_scratch_len,
+                                     uint8_t *payload, size_t payload_len, qr_segment *segments,
+                                     size_t segment_capacity, qr_result *result, qr_stats *stats);
 /* Caller-owned tracker, explicit sampling and shared frame pixel limit.
  * Initialize via qr_tracker_init or all-zero initialization before use.
  * Every tracker/state/stats/config/input/output span must be mutually disjoint.
  * Unknown tags, noncanonical Searching fields, invalid misses or saved bounds return
  * QR_INVALID_ARGUMENT without modifying tracker/result/stats. Candidate misses=1;
- * Tracking misses=0. Saved dimensions must be nonzero, within compiled maxima, and contain the nonempty ROI.
- * Current width/height changes force a full search; same-size crop/scale changes require reset.
- * Ordinary ROI miss triggers same-frame full search sharing all counters and budgets.
- * First complete frame miss keeps Candidate; second expires it. No image/payload is retained.
- * Only success/complete recognition miss update state. All terminal errors preserve state.
- * Result corners are relative to the complete supplied image, not the internal tracked ROI. */
-int32_t qr_tracker_decode_gray(qr_tracker *tracker, const qr_config *config,
-    size_t max_pixel_reads, uint32_t strategy,
-    const uint8_t *pixels, size_t pixels_len, size_t width, size_t height, size_t stride,
-    uint8_t *detector_scratch, size_t detector_scratch_len,
-    uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,
-    qr_segment *segments, size_t segment_capacity, qr_result *result, qr_stats *stats);
+ * Tracking misses=0. Saved dimensions must be nonzero, within compiled maxima, and contain the
+ * nonempty ROI. Current width/height changes force a full search; same-size crop/scale changes
+ * require reset. Ordinary ROI miss triggers same-frame full search sharing all counters and
+ * budgets. First complete frame miss keeps Candidate; second expires it. No image/payload is
+ * retained. Only success/complete recognition miss update state. All terminal errors preserve
+ * state. Result corners are relative to the complete supplied image, not the internal tracked ROI.
+ */
+int32_t qr_tracker_decode_gray(qr_tracker *tracker, const qr_config *config, size_t max_pixel_reads,
+                               uint32_t strategy, const uint8_t *pixels, size_t pixels_len,
+                               size_t width, size_t height, size_t stride,
+                               uint8_t *detector_scratch, size_t detector_scratch_len,
+                               uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload,
+                               size_t payload_len, qr_segment *segments, size_t segment_capacity,
+                               qr_result *result, qr_stats *stats);

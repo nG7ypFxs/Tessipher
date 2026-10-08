@@ -14,6 +14,11 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.10.10"
+          cache-dependency-glob: "tools/*.py"
+      - run: uv run tools/c_format.py --check
       - run: cargo test --workspace --locked
       - run: cargo test --workspace --locked --release
       - run: cargo fmt --all -- --check
@@ -21,7 +26,7 @@ jobs:
       - run: cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings -D missing_docs
-      - run: python3 tools/c_smoke.py
+      - run: uv run tools/c_smoke.py
       - run: python3 tools/cross_decode.py
       - run: cargo run -p qr --example fuzz_smoke --release
       - run: cargo run -p qr --example bench --release

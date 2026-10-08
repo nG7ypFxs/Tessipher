@@ -63,6 +63,23 @@ Bits are packed row-major, most-significant bit first, without padding between r
 The side length is `17 + 4 × version`, from 21 to 177 modules.
 See [memory and decoding APIs](docs/api.md) for output contracts and errors.
 
+## C API
+
+Build the host static library and run the C checks from the repository root:
+
+```sh
+cargo build -p qr-ffi --release --locked
+uv run tools/c_smoke.py
+```
+
+Include [tessipher.h](include/tessipher.h) and link `target/release/libqr_ffi.a`.
+Start with `qr_default_config` and `qr_memory`, allocate the queried storage,
+then call `qr_decode_matrix` for packed modules or `qr_decode_gray` for Gray8
+pixels. Read payload and segment prefixes only after `QR_OK`.
+The complete [C example](examples/c_decode.c) decodes a repository fixture;
+[C integration](docs/ffi.md) covers compile/link commands, ROI layout, budgets,
+output interpretation, every status code, and firmware builds.
+
 ## Build and validation
 
 Use [uv](https://docs.astral.sh/uv/getting-started/installation/) for the C checks.

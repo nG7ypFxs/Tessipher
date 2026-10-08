@@ -294,6 +294,8 @@ pub unsafe extern "C" fn qr_decode_matrix(
     }
 }
 /// Decodes the first symbol found in a borrowed Gray8 ROI.
+/// Uses center-then-majority-five sampling, with no hidden tracking state.
+/// Explicit center selection is available through [`qr_decode_gray_with_sampling`].
 /// Uses the finite default pixel-read limit [`detect::DEFAULT_MAX_PIXEL_READS`].
 ///
 /// Pixels start at the ROI's top-left. Width and height must be nonzero,
@@ -388,65 +390,418 @@ pub unsafe extern "C" fn qr_decode_gray_with_budget(
     segment_capacity: usize,
     out: *mut QrResult,
 ) -> i32 {
+    unsafe {
+        qr_decode_gray_with_sampling(
+            c,
+            max_pixel_reads,
+            QR_DEFAULT_SAMPLING_STRATEGY,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            ptr::null_mut(),
+        )
+    }
+}
+
+/// Legacy center sampling: no extra attempt after a failed matrix.
+pub const QR_SAMPLING_CENTER: u32 = 0;
+/// Center sampling with a five-vote fallback after core content failure.
+pub const QR_SAMPLING_CENTER_THEN_MAJORITY5: u32 = 1;
+/// Sampling policy used by the existing stateless Gray8 C entry points.
+pub const QR_DEFAULT_SAMPLING_STRATEGY: u32 = QR_SAMPLING_CENTER_THEN_MAJORITY5;
+
+fn sampling(n: u32) -> Result<detect::SamplingStrategy, i32> {
+    match n {
+        QR_SAMPLING_CENTER => Ok(detect::SamplingStrategy::Center),
+        QR_SAMPLING_CENTER_THEN_MAJORITY5 => Ok(detect::SamplingStrategy::CenterThenMajority5),
+        _ => Err(12),
+    }
+}
+fn restore(t: QrTracker) -> Result<detect::Tracker, i32> {
+    if t.image_width > MAX_WIDTH || t.image_height > MAX_HEIGHT {
+        return Err(1);
+    }
+    let hint = detect::TrackHint {
+        roi: detect::Rect {
+            x: t.roi_x,
+            y: t.roi_y,
+            width: t.roi_width,
+            height: t.roi_height,
+        },
+        image_width: t.image_width,
+        image_height: t.image_height,
+    };
+    let state = match (t.tag, t.misses) {
+        (0, 0)
+            if t.roi_x == 0
+                && t.roi_y == 0
+                && t.roi_width == 0
+                && t.roi_height == 0
+                && t.image_width == 0
+                && t.image_height == 0 =>
+        {
+            detect::TrackerState::Searching
+        }
+        (1, 1) => detect::TrackerState::Candidate { hint, misses: 1 },
+        (2, 0) => detect::TrackerState::Tracking { hint },
+        _ => return Err(1),
+    };
+    detect::Tracker::from_state(state).map_err(|_| 1)
+}
+fn save(state: detect::TrackerState) -> QrTracker {
+    let (tag, misses, hint) = match state {
+        detect::TrackerState::Searching => return QrTracker::default(),
+        detect::TrackerState::Candidate { hint, misses } => (1, misses as u32, hint),
+        detect::TrackerState::Tracking { hint } => (2, 0, hint),
+    };
+    QrTracker {
+        tag,
+        misses,
+        roi_x: hint.roi.x,
+        roi_y: hint.roi.y,
+        roi_width: hint.roi.width,
+        roi_height: hint.roi.height,
+        image_width: hint.image_width,
+        image_height: hint.image_height,
+    }
+}
+fn work(s: detect::Stats) -> QrStats {
+    QrStats {
+        pixel_reads: s.pixel_reads,
+        rows: s.rows,
+        finder_observations: s.finder_observations,
+        candidates: s.candidates,
+        retries: s.retries,
+        passes: s.passes,
+    }
+}
+fn detection_result(d: detect::Detection) -> QrResult {
+    let mut r = result(d.decoded);
+    r.inverted = d.inverted as u32;
+    r.local_threshold = d.local_threshold as u32;
+    r.candidates = d.stats.candidates;
+    r.retries = d.stats.retries;
+    [
+        r.corner0_x,
+        r.corner0_y,
+        r.corner1_x,
+        r.corner1_y,
+        r.corner2_x,
+        r.corner2_y,
+        r.corner3_x,
+        r.corner3_y,
+    ] = [
+        d.corners[0].x,
+        d.corners[0].y,
+        d.corners[1].x,
+        d.corners[1].y,
+        d.corners[2].x,
+        d.corners[2].y,
+        d.corners[3].x,
+        d.corners[3].y,
+    ];
+    r
+}
+/// Queries target tracker/stats sizes without changing the ABI-1 memory query.
+/// `out` need not be initialized. Returns 0 or invalid-argument status 1.
+/// # Safety
+/// `out` must name one live, aligned, exclusively writable [`QrTrackerMemory`].
+#[no_mangle]
+pub unsafe extern "C" fn qr_tracker_memory(out: *mut QrTrackerMemory) -> i32 {
+    if range(out, 1).is_err() {
+        return 1;
+    }
+    unsafe {
+        out.write(QrTrackerMemory {
+            tracker_size: size_of::<QrTracker>(),
+            tracker_alignment: align_of::<QrTracker>(),
+            stats_size: size_of::<QrStats>(),
+            stats_alignment: align_of::<QrStats>(),
+        });
+    }
+    0
+}
+/// Writes canonical Searching without reading the previous storage.
+/// `out` may be uninitialized. Returns 0 or invalid-argument status 1.
+/// # Safety
+/// `out` must name one live, aligned, exclusively writable [`QrTracker`].
+#[no_mangle]
+pub unsafe extern "C" fn qr_tracker_init(out: *mut QrTracker) -> i32 {
+    if range(out, 1).is_err() {
+        return 1;
+    }
+    unsafe {
+        out.write(QrTracker::default());
+    }
+    0
+}
+/// Discards all saved state; has the same write-only contract as [`qr_tracker_init`].
+/// # Safety
+/// `out` must name one live, aligned, exclusively writable [`QrTracker`].
+#[no_mangle]
+pub unsafe extern "C" fn qr_tracker_reset(out: *mut QrTracker) -> i32 {
+    unsafe { qr_tracker_init(out) }
+}
+struct GrayCall {
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    strategy: u32,
+    tracker: Option<*mut QrTracker>,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrResult,
+    stats: *mut QrStats,
+}
+unsafe fn gray_call(a: GrayCall) -> i32 {
     let run = || -> Result<(), i32> {
-        if segment_capacity > qcore::MAX_SEGMENTS {
+        if a.segment_capacity > qcore::MAX_SEGMENTS {
             return Err(1);
         }
         disjoint(&[
-            range(c, 1)?,
-            range(pixels, pixels_len)?,
-            range(detector_scratch, detector_scratch_len)?,
-            range(core_scratch, core_scratch_len)?,
-            range(payload, payload_len)?,
-            range(segments, segment_capacity)?,
-            range(out, 1)?,
+            range(a.c, 1)?,
+            range(a.pixels, a.pixels_len)?,
+            range(a.detector_scratch, a.detector_scratch_len)?,
+            range(a.core_scratch, a.core_scratch_len)?,
+            range(a.payload, a.payload_len)?,
+            range(a.segments, a.segment_capacity)?,
+            range(a.out, 1)?,
+            range(a.stats, usize::from(!a.stats.is_null()))?,
+            match a.tracker {
+                Some(p) => range(p, 1)?,
+                None => Range { start: 0, end: 0 },
+            },
         ])?;
-        let mut cfg = config(unsafe { c.read() });
-        cfg.max_pixel_reads = max_pixel_reads;
+        let strategy = sampling(a.strategy)?;
+        let mut tracker = match a.tracker {
+            Some(p) => Some(restore(unsafe { p.read() })?),
+            None => None,
+        };
+        let mut cfg = config(unsafe { a.c.read() });
+        cfg.max_pixel_reads = a.max_pixel_reads;
         cfg.scratch_bytes().map_err(status)?;
-        let image =
-            detect::GrayImage::new(unsafe { bytes(pixels, pixels_len) }, width, height, stride)
-                .map_err(status)?;
-        let d = detect::decode(
-            image,
-            &cfg,
-            unsafe { bytes_mut(detector_scratch, detector_scratch_len) },
-            unsafe { bytes_mut(core_scratch, core_scratch_len) },
-            unsafe { bytes_mut(payload, payload_len) },
-            unsafe { segments_mut(segments, segment_capacity) },
+        let image = detect::GrayImage::new(
+            unsafe { bytes(a.pixels, a.pixels_len) },
+            a.width,
+            a.height,
+            a.stride,
         )
         .map_err(status)?;
-        let mut r = result(d.decoded);
-        r.inverted = d.inverted as u32;
-        r.local_threshold = d.local_threshold as u32;
-        r.candidates = d.stats.candidates;
-        r.retries = d.stats.retries;
-        [
-            r.corner0_x,
-            r.corner0_y,
-            r.corner1_x,
-            r.corner1_y,
-            r.corner2_x,
-            r.corner2_y,
-            r.corner3_x,
-            r.corner3_y,
-        ] = [
-            d.corners[0].x,
-            d.corners[0].y,
-            d.corners[1].x,
-            d.corners[1].y,
-            d.corners[2].x,
-            d.corners[2].y,
-            d.corners[3].x,
-            d.corners[3].y,
-        ];
+        let previous = tracker.as_ref().map(detect::Tracker::state);
+        let mut stats = detect::Stats::default();
+        // All numeric ranges, state fields and overlaps were checked before initialization.
+        let ds = unsafe { bytes_mut(a.detector_scratch, a.detector_scratch_len) };
+        let cs = unsafe { bytes_mut(a.core_scratch, a.core_scratch_len) };
+        let output = unsafe { bytes_mut(a.payload, a.payload_len) };
+        let segments = unsafe { segments_mut(a.segments, a.segment_capacity) };
+        let decoded = match tracker.as_mut() {
+            Some(t) => {
+                t.decode_with_stats(image, &cfg, strategy, ds, cs, output, segments, &mut stats)
+            }
+            None => detect::decode_with_sampling(
+                image, &cfg, strategy, ds, cs, output, segments, &mut stats,
+            ),
+        };
+        if !a.stats.is_null() {
+            unsafe {
+                a.stats.write(work(stats));
+            }
+        }
+        if let (Some(p), Some(t)) = (a.tracker, tracker) {
+            // Rust preserves its previous state on every terminal error. Do not write
+            // C storage on that path, including after a changed input dimension.
+            if decoded.is_ok() || Some(t.state()) != previous {
+                unsafe {
+                    p.write(save(t.state()));
+                }
+            }
+        }
+        let d = decoded.map_err(status)?;
         unsafe {
-            out.write(r);
+            a.out.write(detection_result(d));
         }
         Ok(())
     };
     match run() {
         Ok(()) => 0,
         Err(e) => e,
+    }
+}
+/// Decodes Gray8 with explicit sampling, pixel budget, and optional failure counters.
+/// Unknown strategies return 12; 0 selects center, 1 center-then-majority-five.
+/// A null `stats` is allowed; nonnull storage is written after decoder invocation
+/// on success or failure, but is untouched on earlier argument rejection.
+/// # Safety
+/// All [`qr_decode_gray`] pointer and exclusive-access requirements apply.
+/// A nonnull `stats` must additionally name one aligned, exclusively writable
+/// [`QrStats`] disjoint from every other range; it need not be initialized.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_decode_gray_with_sampling(
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    strategy: u32,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrResult,
+    stats: *mut QrStats,
+) -> i32 {
+    unsafe {
+        gray_call(GrayCall {
+            c,
+            max_pixel_reads,
+            strategy,
+            tracker: None,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            stats,
+        })
+    }
+}
+/// Decodes one tracked frame with explicit sampling, pixel budget, and optional stats.
+///
+/// Tracker integers are validated against saved dimensions before use; invalid
+/// tags/fields return 1. Saved dimensions must fit this library's compiled limits.
+/// Current input resize is valid and forces full search.
+/// Only success or complete recognition failure updates state. Capacity, budget,
+/// validation, or pointer errors leave state and result untouched. Result corners
+/// refer to the complete supplied image. The tracker retains no borrowed storage.
+/// # Safety
+/// All [`qr_decode_gray_with_sampling`] requirements apply. `tracker` must name
+/// one initialized, aligned, exclusively writable [`QrTracker`], disjoint from
+/// every other range. Initialize with [`qr_tracker_init`] or zero-initialize all
+/// fields before first use. Reading uninitialized tracker storage is invalid;
+/// integer validation cannot prove initialization, allocation or exclusivity.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_tracker_decode_gray(
+    tracker: *mut QrTracker,
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    strategy: u32,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrResult,
+    stats: *mut QrStats,
+) -> i32 {
+    unsafe {
+        gray_call(GrayCall {
+            c,
+            max_pixel_reads,
+            strategy,
+            tracker: Some(tracker),
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            stats,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn integer_tracker_roundtrips_and_rejects_noncanonical_fields() {
+        let hint = detect::TrackHint {
+            roi: detect::Rect {
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 80,
+            },
+            image_width: 400,
+            image_height: 300,
+        };
+        for state in [
+            detect::TrackerState::Searching,
+            detect::TrackerState::Candidate { hint, misses: 1 },
+            detect::TrackerState::Tracking { hint },
+        ] {
+            assert_eq!(restore(save(state)).unwrap().state(), state);
+        }
+        let valid = save(detect::TrackerState::Tracking { hint });
+        let mut invalid = [valid; 7];
+        invalid[0].tag = 3;
+        invalid[1].misses = 1;
+        invalid[2].roi_x = usize::MAX;
+        invalid[3].roi_height = 0;
+        invalid[4].image_width = MAX_WIDTH + 1;
+        invalid[5].image_height = 0;
+        invalid[6].roi_y = 300;
+        for t in invalid {
+            assert!(restore(t).is_err());
+        }
+        assert!(restore(QrTracker {
+            roi_x: 1,
+            ..QrTracker::default()
+        })
+        .is_err());
     }
 }

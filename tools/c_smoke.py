@@ -9,3 +9,6 @@ if platform.system()=='Darwin': libs+=['-framework','Security','-framework','Cor
 else: libs+=['-ldl']
 subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-Iinclude','examples/c_smoke.c',str(target/'release/libqr_ffi.a'),*libs,'-o',str(target/'c-smoke')],cwd=root,check=True)
 subprocess.run([str(target/'c-smoke')],cwd=root,check=True)
+
+subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-Iinclude','examples/c_tracking.c',str(target/'release/libqr_ffi.a'),*libs,'-o',str(target/'c-tracking')],cwd=root,check=True)
+subprocess.run([str(target/'c-tracking')],cwd=root,check=True)

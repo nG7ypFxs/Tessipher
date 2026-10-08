@@ -113,6 +113,53 @@ typedef struct qr_result {
     /* ROI-relative y of sampled-grid boundary (0,side); zero for matrix decoding. */
     float corner3_y;
 } qr_result;
+/* Caller-owned initialized integer tracker; all-zero storage means Searching. */
+/* No image/payload/pointer is retained. Do not decode uninitialized storage. */
+typedef struct qr_tracker {
+    /* Searching=0, Candidate=1, Tracking=2; all other tags are invalid. */
+    uint32_t tag;
+    /* Exactly 1 for Candidate, 0 for Searching/Tracking. */
+    uint32_t misses;
+    /* Saved ROI left coordinate in input-image pixels; zero when Searching. */
+    size_t roi_x;
+    /* Saved ROI top coordinate in input-image pixels; zero when Searching. */
+    size_t roi_y;
+    /* Nonzero saved ROI width; zero when Searching. */
+    size_t roi_width;
+    /* Nonzero saved ROI height; zero when Searching. */
+    size_t roi_height;
+    /* Saved input width (1..32768); zero when Searching. */
+    size_t image_width;
+    /* Saved input height (1..32768); zero when Searching. */
+    size_t image_height;
+} qr_tracker;
+/* Actual decode-call work, written on success or failure after decoder invocation. */
+/* Optional output remains untouched when arguments are rejected before decoding. */
+typedef struct qr_stats {
+    /* Actual input reads, including repeats; never exceeds the supplied limit. */
+    size_t pixel_reads;
+    /* Finder rows scanned across all regions/passes. */
+    size_t rows;
+    /* Finder run observations before detailed pattern validation. */
+    size_t finder_observations;
+    /* Finder triples examined across all regions/passes. */
+    size_t candidates;
+    /* Sampling attempts, including fallback; core transpose adds no attempt. */
+    size_t retries;
+    /* Threshold/polarity passes (up to 4 stateless, 8 tracked). */
+    size_t passes;
+} qr_stats;
+/* Target layout query for the new tracker and stats; ABI-1 memory layout is unchanged. */
+typedef struct qr_tracker_memory_info {
+    /* Size of one integer tracker in bytes. */
+    size_t tracker_size;
+    /* Required tracker alignment in bytes. */
+    size_t tracker_alignment;
+    /* Size of one stats structure in bytes. */
+    size_t stats_size;
+    /* Required stats alignment in bytes. */
+    size_t stats_alignment;
+} qr_tracker_memory_info;
 /* Integer return/metadata constants; function ABI uses fixed-width integer types. */
 enum qr_status {
     QR_OK = 0, QR_INVALID_ARGUMENT = 1, QR_OVERLAP = 2,
@@ -191,6 +238,51 @@ int32_t qr_decode_gray_with_budget(const qr_config *config, size_t max_pixel_rea
     uint8_t *detector_scratch, size_t detector_scratch_len,
     uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,
     qr_segment *segments, size_t segment_capacity, qr_result *result);
+
+/* Sampling arguments are uint32_t; unknown values return QR_INVALID_CONFIG.
+ * Existing Gray8 entry points use QR_DEFAULT_SAMPLING_STRATEGY; no hidden tracking.
+ * Explicit Center preserves the earlier sampling/limited-budget behavior. */
+enum qr_sampling_strategy {
+    QR_SAMPLING_CENTER = 0,
+    QR_SAMPLING_CENTER_THEN_MAJORITY5 = 1,
+    QR_DEFAULT_SAMPLING_STRATEGY = QR_SAMPLING_CENTER_THEN_MAJORITY5
+};
+enum qr_tracker_tag { QR_TRACKER_SEARCHING = 0, QR_TRACKER_CANDIDATE = 1, QR_TRACKER_TRACKING = 2 };
+/* New layout query; qr_memory_info and ABI version 1 are unchanged. */
+int32_t qr_tracker_memory(qr_tracker_memory_info *out);
+/* Write-only initialization/reset to canonical all-zero Searching.
+ * out may be uninitialized but must be a live aligned exclusive writable allocation.
+ * Returns QR_OK or QR_INVALID_ARGUMENT; decode must never read uninitialized state. */
+int32_t qr_tracker_init(qr_tracker *out);
+int32_t qr_tracker_reset(qr_tracker *out);
+/* Like qr_decode_gray_with_budget, with explicit sampling and optional stats.
+ * NULL stats is allowed. Nonnull stats must be aligned/writable/disjoint from all spans.
+ * Stats are written on success/failure after decoding starts; pre-decoder argument,
+ * configuration, state or image rejection leaves stats untouched. Result is success-only.
+ * Five-point fallback costs a retry and up to 5 global or 130 local reads per module. */
+int32_t qr_decode_gray_with_sampling(const qr_config *config, size_t max_pixel_reads,
+    uint32_t strategy, const uint8_t *pixels, size_t pixels_len,
+    size_t width, size_t height, size_t stride,
+    uint8_t *detector_scratch, size_t detector_scratch_len,
+    uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,
+    qr_segment *segments, size_t segment_capacity, qr_result *result, qr_stats *stats);
+/* Caller-owned tracker, explicit sampling and shared frame pixel limit.
+ * Initialize via qr_tracker_init or all-zero initialization before use.
+ * Every tracker/state/stats/config/input/output span must be mutually disjoint.
+ * Unknown tags, noncanonical Searching fields, invalid misses or saved bounds return
+ * QR_INVALID_ARGUMENT without modifying tracker/result/stats. Candidate misses=1;
+ * Tracking misses=0. Saved dimensions must be nonzero, within compiled maxima, and contain the nonempty ROI.
+ * Current width/height changes force a full search; same-size crop/scale changes require reset.
+ * Ordinary ROI miss triggers same-frame full search sharing all counters and budgets.
+ * First complete frame miss keeps Candidate; second expires it. No image/payload is retained.
+ * Only success/complete recognition miss update state. All terminal errors preserve state.
+ * Result corners are relative to the complete supplied image, not the internal tracked ROI. */
+int32_t qr_tracker_decode_gray(qr_tracker *tracker, const qr_config *config,
+    size_t max_pixel_reads, uint32_t strategy,
+    const uint8_t *pixels, size_t pixels_len, size_t width, size_t height, size_t stride,
+    uint8_t *detector_scratch, size_t detector_scratch_len,
+    uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload, size_t payload_len,
+    qr_segment *segments, size_t segment_capacity, qr_result *result, qr_stats *stats);
 
 #ifdef __cplusplus
 }

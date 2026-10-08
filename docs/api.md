@@ -180,8 +180,19 @@ is an alias of `Stats`; its `passes` may reach eight for a ROI plus full search.
 All `Config` limits and scratch requirements apply to the complete input image,
 including when the saved ROI is smaller. `Detection::stats` equals the supplied
 stats on success; failure stats still include all completed and partial reads.
+The C API now exposes explicit sampling and integer caller-owned tracking; see [C ABI](ffi.md).
+
 
 `Tracker::from_state(state)` safely restores saved Rust enum state. Candidate
 misses must be exactly one; image dimensions must be in 1..=32768, and the
 nonempty integer rectangle must fit those saved dimensions without arithmetic
 overflow. Its validation uses saved dimensions, independently of the next frame.
+The C representation validates the same geometry and additionally requires saved
+dimensions to fit the linked C library's compiled maxima.
+
+Rust `decode` / `decode_with_stats` remain `Center`. C `qr_decode_gray` /
+`qr_decode_gray_with_budget` now select `CenterThenMajority5`, and the generated
+header names that choice as `QR_DEFAULT_SAMPLING_STRATEGY`. Explicit C sampling
+uses fixed integer selectors 0 and 1; unknown selectors return `QR_INVALID_CONFIG`.
+This preserves binary layout and symbols but changes behavior on failed center
+attempts, including retry/pixel consumption and which candidate is examined next.

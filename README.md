@@ -105,3 +105,13 @@ frame, sharing all budgets and counters. Returned corners refer to the complete
 input image. The tracker borrows no image, scratch, or decoded payload between
 calls. See [detection](docs/detection.md) for transitions and limitations and
 [API](docs/api.md) for usage.
+
+
+The existing C Gray8 entry points now default to center-then-majority-five after
+paired Rust and C performance checks. Use `qr_decode_gray_with_sampling` with
+`QR_SAMPLING_CENTER` to preserve earlier sampling under tight retry/read budgets.
+C tracking is explicit and caller-owned through `qr_tracker_init` and
+`qr_tracker_decode_gray`; stateless calls retain no hidden state. Normal first
+center successes have unchanged work; a representative long failure costs about
+37% more time and 27% more reads. See [C integration](docs/ffi.md) and the
+[performance record](docs/sampling-performance.md) for the decision and tradeoffs.

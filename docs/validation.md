@@ -379,3 +379,50 @@ counts and reduce reads on the next tracked frame. Photo 3 at 640 remains
 reaches module sampling. These examples do not guarantee blur, low-resolution,
 perspective, or decorated-finder recognition. No MCU stack/cycle measurements
 were performed. Existing FNC1 changes and their independent fixtures remain intact.
+
+## C default sampling and integer tracking API (2026-10-08)
+
+The fixed paired gate in [performance evaluation](sampling-performance.md)
+passed in Rust and C, including C buffer initialization with small and maximum
+capacities. Existing C Gray8 calls now default to center-then-majority-five;
+Rust legacy calls remain Center. C explicit Center remains available. Normal
+first-center work is identical; representative long failures cost approximately
+37% more time and 27% more reads. The public raw measurements preserve failure
+cases and mixed frame sequences, rather than averaging only improvements.
+
+Added the explicit sampling API, integer `qr_tracker`, init/reset, layout query,
+tracked decode and optional actual counters, without changing existing ABI-1
+structs, signatures, symbols or error codes. Safe Rust `Tracker::from_state`
+validates enum state before restoration. C validates all integer fields, saved
+compiled image bounds and all state/stats/input/output overlaps before making
+references or initializing buffers. Init/reset write without reading old storage.
+No state contains pointers or previous payloads.
+
+The C suite covers actual center damage recovery/default behavior, normal/mirror
+one-retry decoding, success/failure stats, ROI+full exact/one-short budgets,
+Searching/Tracking/Candidate lifecycle, false-candidate expiry, resize/reset,
+right/bottom coordinates, parent stride and unpadded final row. Every state is
+checked against null/misaligned arguments, state/stats aliases with every other
+range, malformed integers, scratch/output/segment capacity shortages, and
+pixel/candidate/retry exhaustion, including byte-preserved state/result and
+pre-decoder rejection canaries. Rust restoration roundtrips/rejections and
+no-allocation restoration were added.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --workspace --locked` | Passed |
+| `cargo test --workspace --release --locked` | Passed |
+| `cargo +1.85 test --workspace --locked` | Passed on Rust 1.85.1 |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Passed |
+| `RUSTDOCFLAGS='-D warnings -D missing_docs' cargo doc --workspace --no-deps --locked` | Passed |
+| Fresh host `cargo build -p qr-ffi --release --locked`, header check and C smoke | Passed; ABI1 core7077/detector4557/alignment1; tracker56/align8/stats48/align8 |
+| Old ABI-1 header caller compiled and linked to the new archive | Passed using the pre-change header copied to `/tmp` |
+| `CARGO_TARGET_DIR=/tmp/tessipher-c-bench-target python3 tools/c_sampling_bench.py` | Fresh target build/link/run passed |
+| `cargo build -p qr-core --target thumbv6m-none-eabi --release --locked` | Passed |
+| `cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release --locked` | Passed |
+| `python3 tools/check_symbols.py` | No heap/unwind runtime imports |
+| `cargo check -p qr --target wasm32-unknown-unknown --locked` | Passed |
+| `cargo run -p qr --example fuzz_smoke --release` | 20,000 payload / 10,000 matrix / 200 image cases; no panics |
+
+Existing FNC1 and Rust sampling/tracking changes remain intact. Actual MCU cycle/stack and camera-rate evaluation remains outstanding.

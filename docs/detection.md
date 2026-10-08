@@ -136,3 +136,11 @@ async ownership, nor enumeration of multiple symbols. Five-point voting may
 help isolated center damage, but does not guarantee improvement for blur, very
 small modules, strong projection, or missed/decorated finder patterns. Extra
 fallback work can leave fewer geometries available under the same work budget.
+
+
+The sampling choice remains explicit in Rust and in the C tracker API. Existing
+stateless C Gray8 APIs use center-then-majority-five by default, following the
+paired gate in [performance evaluation](sampling-performance.md). Explicit Center
+is available for callers prioritizing long-failure latency or an older tight-budget
+contract. Small `max_retries` or `max_pixel_reads` values may leave fewer candidate
+projections under the new default, even when ABI-1 struct layouts are unchanged.

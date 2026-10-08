@@ -81,3 +81,74 @@ Record measurements with and without interrupts alongside clock frequency, flash
 `examples/mcu_measure.c` is a template showing only the measurement boundaries.
 The board supplies `board_cycles` and `board_record`; the caller also manages the image, storage, and initialization.
 Cycle counts on a physical board, stack watermarks, and success rates on camera input have not been measured.
+
+
+## Sampling default, explicit counters, and tracking
+
+`qr_decode_gray` and `qr_decode_gray_with_budget` default to
+`QR_SAMPLING_CENTER_THEN_MAJORITY5`, named by `QR_DEFAULT_SAMPLING_STRATEGY`.
+The normal first center-success path has unchanged reads/retries. After a core
+content failure, five-point fallback consumes one retry and up to five global or
+130 local reads per module. Failed projections can therefore consume more work,
+leave fewer hypotheses under tight budgets, change the first decoded symbol, or
+return a budget error where the old Center strategy reached a different result.
+The existing ABI-1 struct layouts, function signatures, symbols, and error codes
+are unchanged. Rust legacy entry points continue to default to Center.
+
+`qr_decode_gray_with_sampling(config, max_pixel_reads, strategy, ..., result, stats)`
+selects `QR_SAMPLING_CENTER` (0) or `QR_SAMPLING_CENTER_THEN_MAJORITY5` (1).
+Unknown values return `QR_INVALID_CONFIG`. `stats` may be NULL; otherwise it names
+one disjoint writable `qr_stats`. It receives actual cumulative counters on
+success or failure after decoder invocation. Pointer/overlap/state/strategy/config
+or invalid-image rejection before decoder invocation leaves it untouched. A
+short scratch buffer or oversized valid image can reach decoder validation and
+therefore produce zero counters. Results are still written only on success.
+
+For C tracking, query `qr_tracker_memory` for target `qr_tracker` and `qr_stats`
+sizes/alignment without changing `qr_memory_info`. Allocate one `qr_tracker` and
+call `qr_tracker_init` before decoding; complete all-zero initialization is also
+valid. Init/reset write canonical Searching without reading previous storage and
+may receive live, writable, properly aligned uninitialized storage. Decode must
+never receive uninitialized state. Numeric fields cannot detect uninitialized
+storage or prove pointer allocation validity.
+
+```c
+qr_tracker tracker;
+qr_stats stats;
+qr_tracker_init(&tracker);
+/* Caller allocates config, image, scratch, payload, segments and result as usual. */
+int32_t code = qr_tracker_decode_gray(&tracker, &config, 64000000,
+    QR_SAMPLING_CENTER_THEN_MAJORITY5,
+    pixels, pixels_len, width, height, stride,
+    detector_scratch, detector_scratch_len, core_scratch, core_scratch_len,
+    payload, payload_capacity, segments, segment_capacity, &result, &stats);
+```
+
+The public state is entirely integer data: tag, misses, rectangle, and saved input
+dimensions. It retains no pointer, image, scratch, output or previous payload.
+Searching tag 0 requires every remaining field to be zero. Candidate tag 1
+requires misses=1; Tracking tag 2 requires misses=0. Saved dimensions must be
+nonzero and within `qr_memory`'s compiled maxima, and a nonempty rectangle must
+fit them using checked arithmetic. Unknown tags or inconsistent integers return
+`QR_INVALID_ARGUMENT` before buffer initialization. Rust enums are constructed
+only after validation; no raw C enum or integer is transmuted into a Rust enum.
+
+All nonempty ranges, including tracker, optional stats, config and input, must
+be mutually disjoint. Tracker/state/result bytes remain unchanged on validation,
+capacity, or pixel/candidate/retry-budget errors. Success and complete ordinary
+recognition misses update the state. ROI and full-image search share one frame's
+budgets and counters, including center and majority attempts; counters can reach
+eight passes. First complete miss retains Candidate; a second expires it.
+A candidate does not confirm QR presence. Input width/height changes invalidate
+the saved hint for searching, but are not invalid saved state. Stride changes
+retain coordinates; same-size crop origin or scale changes require
+`qr_tracker_reset`. Corners always refer to the complete supplied input image.
+
+`examples/c_tracking.c` checks pointer/state/lifecycle/budget contracts, and
+`python3 tools/c_sampling_bench.py` measures paired calls including FFI byte and
+segment initialization with small and conservative maximum capacities. Its
+one-pixel `NotFound` case isolates a practical initialization floor, including
+validation and one min/max read, rather than measuring buffer clearing alone.
+Both benchmark allocation/input generation and output printing are outside timing.
+See [performance evaluation](sampling-performance.md) for the measured failure
+cost and the limitations of host results.

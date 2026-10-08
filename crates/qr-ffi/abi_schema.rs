@@ -110,4 +110,54 @@ abi_struct! {
     /// ROI-relative y of sampled-grid boundary (0,side); zero for matrix decoding.
     corner3_y: f32
 }}
+abi_struct! {
+    /// Caller-owned initialized integer tracker; all-zero storage means Searching.
+    /// No image/payload/pointer is retained. Do not decode uninitialized storage.
+    QrTracker => "qr_tracker" {
+    /// Searching=0, Candidate=1, Tracking=2; all other tags are invalid.
+    tag: u32,
+    /// Exactly 1 for Candidate, 0 for Searching/Tracking.
+    misses: u32,
+    /// Saved ROI left coordinate in input-image pixels; zero when Searching.
+    roi_x: usize,
+    /// Saved ROI top coordinate in input-image pixels; zero when Searching.
+    roi_y: usize,
+    /// Nonzero saved ROI width; zero when Searching.
+    roi_width: usize,
+    /// Nonzero saved ROI height; zero when Searching.
+    roi_height: usize,
+    /// Saved input width (1..32768); zero when Searching.
+    image_width: usize,
+    /// Saved input height (1..32768); zero when Searching.
+    image_height: usize
+}}
+abi_struct! {
+    /// Actual decode-call work, written on success or failure after decoder invocation.
+    /// Optional output remains untouched when arguments are rejected before decoding.
+    QrStats => "qr_stats" {
+    /// Actual input reads, including repeats; never exceeds the supplied limit.
+    pixel_reads: usize,
+    /// Finder rows scanned across all regions/passes.
+    rows: usize,
+    /// Finder run observations before detailed pattern validation.
+    finder_observations: usize,
+    /// Finder triples examined across all regions/passes.
+    candidates: usize,
+    /// Sampling attempts, including fallback; core transpose adds no attempt.
+    retries: usize,
+    /// Threshold/polarity passes (up to 4 stateless, 8 tracked).
+    passes: usize
+}}
+abi_struct! {
+    /// Target layout query for the new tracker and stats; ABI-1 memory layout is unchanged.
+    QrTrackerMemory => "qr_tracker_memory_info" {
+    /// Size of one integer tracker in bytes.
+    tracker_size: usize,
+    /// Required tracker alignment in bytes.
+    tracker_alignment: usize,
+    /// Size of one stats structure in bytes.
+    stats_size: usize,
+    /// Required stats alignment in bytes.
+    stats_alignment: usize
+}}
 }; }

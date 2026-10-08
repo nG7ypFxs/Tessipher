@@ -280,3 +280,46 @@ fn decoding_does_not_allocate() {
     assert_eq!(h.unwrap().stats.retries, 2);
     assert_eq!(allocations, 0);
 }
+
+#[cfg(feature = "micro-qr-detect")]
+#[test]
+fn micro_decoding_does_not_allocate() {
+    let corpus = include_bytes!("../../../fixtures/micro-segno.bin");
+    let output_len = u16::from_le_bytes([corpus[8], corpus[9]]) as usize;
+    let matrix_len = u16::from_le_bytes([corpus[10], corpus[11]]) as usize;
+    let bits = &corpus[12 + output_len..12 + output_len + matrix_len];
+    let matrix = qr::MicroMatrix::new(bits, 11).unwrap();
+    let mut core = [0; qr::core::SCRATCH_BYTES];
+    let config = qr::Config::<64, 64>::default();
+    let mut detector = vec![0; config.scratch_bytes().unwrap()];
+    let mut output = [0; 35];
+    let mut segments = [qr::Segment::EMPTY; 4];
+    let mut pixels = [255; 60 * 60];
+    for y in 0..11 {
+        for x in 0..11 {
+            if matrix.get(x, y) != Some(true) {
+                continue;
+            }
+            for dy in 0..4 {
+                for dx in 0..4 {
+                    pixels[((y + 2) * 4 + dy) * 60 + (x + 2) * 4 + dx] = 0;
+                }
+            }
+        }
+    }
+    let image = qr::GrayImage::new(&pixels, 60, 60, 60).unwrap();
+    start_counting();
+    let matrix_result = qr::decode_micro_matrix(matrix, &mut core, &mut output, &mut segments);
+    let image_result = qr::decode_micro_gray(
+        image,
+        &config,
+        &mut detector,
+        &mut core,
+        &mut output,
+        &mut segments,
+    );
+    let allocations = stop_counting();
+    assert!(matrix_result.is_ok());
+    assert!(image_result.is_ok());
+    assert_eq!(allocations, 0);
+}

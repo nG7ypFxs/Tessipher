@@ -1,4 +1,5 @@
-//! Heap-free QR Model 2 matrix decoder. All variable-size memory belongs to the caller.
+//! Heap-free QR Model 2 matrix decoder with optional Micro QR support.
+//! All variable-size memory belongs to the caller.
 //!
 //! Matrix storage is packed row-major, most-significant bit first, with no row padding.
 //! Scratch is byte-aligned. On failure, scratch and output contents are unspecified.
@@ -11,6 +12,7 @@
 //! transformations. FNC1 percent escapes continue across Alphanumeric segment
 //! boundaries and ECI headers; other data modes end the escape sequence.
 //! Structured Append metadata is returned without joining symbols.
+//! Enable Cargo feature `micro-qr` for [`MicroMatrix`] and [`decode_micro`].
 //!
 //! ```
 //! use qr_core::{Matrix, MAX_MATRIX_BYTES};
@@ -24,9 +26,16 @@
 //! ```
 #![no_std]
 #![forbid(unsafe_code)]
+#[cfg(feature = "micro-qr")]
+mod micro;
 mod payload;
 mod rs;
 mod tables;
+#[cfg(feature = "micro-qr")]
+pub use micro::{
+    decode_micro, MicroDecoded, MicroEcLevel, MicroMatrix, MicroVersion, MICRO_MAX_MATRIX_BYTES,
+    MICRO_MAX_PAYLOAD_BYTES, MICRO_MAX_SIDE, MICRO_SCRATCH_BYTES,
+};
 
 /// Largest supported QR Model 2 version (40).
 pub const MAX_VERSION: u8 = 40;

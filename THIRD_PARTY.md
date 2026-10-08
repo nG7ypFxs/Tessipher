@@ -59,8 +59,10 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Source: <https://github.com/heuer/segno>
 Package: <https://pypi.org/project/segno/1.6.6/>
-Segno is a second independent QR encoder used only by `tools/generate_segno_fixtures.py`.
-Its source or runtime package is not bundled or linked. The generated 24-vector corpus and versioned provenance are checked in under `fixtures/segno-boundaries.*`.
+Segno is a second independent QR and Micro QR encoder used only by `tools/generate_segno_fixtures.py`.
+Its source or runtime package is not bundled or linked. The generated 24-vector
+Model 2 corpus and 125-vector Micro QR corpus, with versioned provenance, are
+checked in under `fixtures/segno-boundaries.*` and `fixtures/micro-segno.*`.
 The regeneration environment pins `segno==1.6.6`; its upstream license is reproduced here for reference.
 
 Copyright (c) 2016 - 2025, Lars Heuer

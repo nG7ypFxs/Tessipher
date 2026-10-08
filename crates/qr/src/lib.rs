@@ -28,11 +28,21 @@
 #![forbid(unsafe_code)]
 pub use qr_core as core;
 pub use qr_core::{decode as decode_matrix, Decoded, Matrix, Segment};
+#[cfg(feature = "micro-qr")]
+pub use qr_core::{
+    decode_micro as decode_micro_matrix, MicroDecoded, MicroEcLevel, MicroMatrix, MicroVersion,
+};
 pub use qr_detect as detect;
 pub use qr_detect::{
     decode as decode_gray, decode_with_sampling as decode_gray_with_sampling,
     decode_with_stats as decode_gray_with_stats, Config, DefaultConfig, Detection, GrayImage, Rect,
     SamplingStrategy, Stats, TrackHint, Tracker, TrackerState, TrackerStats,
+};
+#[cfg(feature = "micro-qr-detect")]
+pub use qr_detect::{
+    decode_micro as decode_micro_gray,
+    decode_micro_with_sampling as decode_micro_gray_with_sampling,
+    decode_micro_with_stats as decode_micro_gray_with_stats, MicroDetection,
 };
 /// Scratch requirements are independent of configured image dimensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

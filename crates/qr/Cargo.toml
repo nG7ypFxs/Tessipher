@@ -8,3 +8,8 @@ license.workspace = true
 [dependencies]
 qr-core = { path = "../qr-core" }
 qr-detect = { path = "../qr-detect" }
+
+[features]
+default = []
+micro-qr = ["qr-core/micro-qr"]
+micro-qr-detect = ["micro-qr", "qr-detect/micro-qr-detect"]

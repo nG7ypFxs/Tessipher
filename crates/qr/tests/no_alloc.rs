@@ -1,14 +1,49 @@
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::cell::Cell;
+
 struct Count;
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    // Constant initialization avoids allocating while the allocator accesses TLS.
+    // None disables measurement; Some counts only this test thread's allocations.
+    static ALLOCS: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+fn count_allocation() {
+    // TLS may be unavailable during thread teardown. Allocators must not panic.
+    let _ = ALLOCS.try_with(|count| {
+        if let Some(n) = count.get() {
+            count.set(Some(n.saturating_add(1)));
+        }
+    });
+}
+
+fn start_counting() {
+    ALLOCS.with(|count| {
+        assert!(count.get().is_none());
+        count.set(Some(0));
+    });
+}
+
+fn stop_counting() -> usize {
+    ALLOCS.with(|count| {
+        count
+            .replace(None)
+            .expect("allocation measurement is active")
+    })
+}
+
 unsafe impl GlobalAlloc for Count {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        if ACTIVE.load(Ordering::Relaxed) {
-            ALLOCS.fetch_add(1, Ordering::Relaxed);
-        }
+        count_allocation();
         unsafe { System.alloc(l) }
+    }
+    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+        count_allocation();
+        unsafe { System.alloc_zeroed(l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: Layout, new_size: usize) -> *mut u8 {
+        count_allocation();
+        unsafe { System.realloc(p, l, new_size) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         unsafe { System.dealloc(p, l) }
@@ -16,6 +51,61 @@ unsafe impl GlobalAlloc for Count {
 }
 #[global_allocator]
 static ALLOCATOR: Count = Count;
+
+#[test]
+fn counting_detects_allocations_and_resets() {
+    let layout = Layout::from_size_align(16, 8).unwrap();
+    start_counting();
+    // Call the allocator directly so release optimization cannot elide the
+    // allocation operations under the standard allocation API's guarantees.
+    unsafe {
+        let p = std::hint::black_box(ALLOCATOR.alloc(layout));
+        assert!(!p.is_null());
+        let resized = std::hint::black_box(ALLOCATOR.realloc(p, layout, 32));
+        assert!(!resized.is_null());
+        ALLOCATOR.dealloc(resized, Layout::from_size_align(32, 8).unwrap());
+        let zeroed = std::hint::black_box(ALLOCATOR.alloc_zeroed(layout));
+        assert!(!zeroed.is_null());
+        ALLOCATOR.dealloc(zeroed, layout);
+    }
+    let allocations = stop_counting();
+    assert_eq!(allocations, 3);
+
+    start_counting();
+    assert_eq!(stop_counting(), 0);
+}
+
+#[test]
+fn counting_ignores_other_threads() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // Spin instead of parking: synchronization must not allocate on the
+    // measured thread, even when its thread parker is not initialized yet.
+    let ready = AtomicBool::new(false);
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !ready.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+            let layout = Layout::from_size_align(16, 8).unwrap();
+            unsafe {
+                let p = std::hint::black_box(ALLOCATOR.alloc(layout));
+                assert!(!p.is_null());
+                ALLOCATOR.dealloc(p, layout);
+            }
+            done.store(true, Ordering::Release);
+        });
+        start_counting();
+        ready.store(true, Ordering::Release);
+        while !done.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
+        let allocations = stop_counting();
+        assert_eq!(allocations, 0);
+    });
+}
+
 #[test]
 fn decoding_does_not_allocate() {
     let bits = include_bytes!("../../../fixtures/v1.bin");
@@ -74,7 +164,7 @@ fn decoding_does_not_allocate() {
     let blank_image = qr::GrayImage::new(&blank_pixels, 400, 300, 400).unwrap();
     let mut tracker = qr::Tracker::new();
     let mut stats = qr::Stats::default();
-    ACTIVE.store(true, Ordering::SeqCst);
+    start_counting();
     let a = qr::decode_matrix(m, &mut cs, &mut out, &mut seg);
     let b = qr::decode_gray(img, &cfg, &mut ds, &mut cs, &mut out, &mut seg);
     let c = qr::decode_matrix(mirrored_matrix, &mut cs, &mut out, &mut seg);
@@ -171,7 +261,7 @@ fn decoding_does_not_allocate() {
         &mut seg,
         &mut stats,
     );
-    ACTIVE.store(false, Ordering::SeqCst);
+    let allocations = stop_counting();
     assert!(
         a.is_ok()
             && b.is_ok()
@@ -188,5 +278,5 @@ fn decoding_does_not_allocate() {
     assert!(matches!(candidate, qr::TrackerState::Candidate { .. }));
     assert_eq!(tracker.state(), qr::TrackerState::Searching);
     assert_eq!(h.unwrap().stats.retries, 2);
-    assert_eq!(ALLOCS.load(Ordering::SeqCst), 0);
+    assert_eq!(allocations, 0);
 }

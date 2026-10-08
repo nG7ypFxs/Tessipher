@@ -11,6 +11,11 @@ int main(void) {
     unsigned count = 0;
     uint8_t header[5];
     while (fread(header, 1, 5, f) == 5) {
+        if (header[1] >= 4) {
+            fprintf(stderr, "Invalid ECC value: %u\n", (unsigned)header[1]);
+            fclose(f);
+            return 1;
+        }
         struct quirc_code code = {0};
         struct quirc_data data;
         unsigned size = header[3] + 256u * header[4];

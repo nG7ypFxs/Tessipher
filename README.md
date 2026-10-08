@@ -1,6 +1,7 @@
 # Tessipher 0.1
 
-Tessipher is a QR Model 2 reader for embedded systems.
+Tessipher is a QR reader for embedded systems, with QR Model 2 enabled by
+default and optional Micro QR support.
 Its Rust runtime crates have no external dependencies and run with `no_std` and no heap allocation.
 The caller owns the image, scratch storage, and decoded output.
 The minimum supported Rust version is 1.85, and the license is MIT OR Apache-2.0 (see [THIRD_PARTY.md](THIRD_PARTY.md) for the separate licenses of reference test code).
@@ -24,6 +25,12 @@ Numeric, Byte, and Kanji modes end the escape sequence, even when empty; Byte va
 A percent pair spanning segments emits one byte belonging to the segment containing its first percent.
 Structured Append returns index/total/parity metadata; joining symbols is the caller's responsibility.
 
+The Cargo feature `micro-qr` adds sampled-matrix decoding for Micro QR M1–M4.
+It supports all legal Micro QR error-correction levels, masks 0–3, Numeric,
+Alphanumeric, Byte, and Kanji modes. `micro-qr-detect` adds bounded single-finder
+Gray8 detection and automatically enables `micro-qr`. Both features are opt-in,
+so default builds retain the Model 2 code path and behavior.
+
 Gray8 input is a borrowed rectangular view.
 For example, a ROI of width 640 with stride 1920 can be passed without copying the image.
 The independent compile-time width and height limits both default to 640.
@@ -33,7 +40,7 @@ Matrix decoding retries the transpose after a normal-orientation content failure
 Reed–Solomon correction adopts the recommended parity reserve p in standard section 7.5.1, limiting V1-L to two corrected codewords per block and V1-M/V2-L to four.
 See the [detection specification](docs/detection.md) for the search envelope and budgets.
 
-Micro QR, rMQR, Model 1, returning multiple symbols, character-set conversion, camera control, and image-file loading are outside the public library's scope.
+rMQR, Model 1, returning multiple symbols, character-set conversion, camera control, and image-file loading are outside the public library's scope.
 
 ## Rust API
 
@@ -63,6 +70,12 @@ Bits are packed row-major, most-significant bit first, without padding between r
 The side length is `17 + 4 × version`, from 21 to 177 modules.
 See [memory and decoding APIs](docs/api.md) for output contracts and errors.
 
+For Micro QR matrix decoding, enable `micro-qr` and use
+`qr::MicroMatrix::new(bits, side)` with `qr::decode_micro_matrix(...)`.
+Enable `micro-qr-detect` for `qr::decode_micro_gray(...)`. Micro QR uses a
+two-module quiet zone. The optional C API uses the same Cargo features and
+caller-owned storage without changing existing ABI-1 types or symbols.
+
 ## C API
 
 Build the host static library and run the C checks from the repository root:
@@ -79,6 +92,13 @@ pixels. Read payload and segment prefixes only after `QR_OK`.
 The complete [C example](examples/c_decode.c) decodes a repository fixture;
 [C integration](docs/ffi.md) covers compile/link commands, ROI layout, budgets,
 output interpretation, every status code, and firmware builds.
+
+For Micro QR C matrix decoding, build `qr-ffi` with `--features micro-qr` and
+use the generated header from that Cargo build. For Gray8 detection, use
+`--features micro-qr-detect`; it enables matrix support too. The header defines
+numeric `QR_HAS_MICRO_QR` and `QR_HAS_MICRO_QR_DETECT` macros, so guard code
+with `#if QR_HAS_MICRO_QR` and `#if QR_HAS_MICRO_QR_DETECT`. Call
+`qr_micro_memory` before a matching `qr_decode_micro_*` entry point.
 The [Zephyr/QEMU example](docs/zephyr.md) checks the C ABI under Zephyr on a
 Cortex-M3, including matrix and Gray8 decoding and pixel-budget failure.
 
@@ -91,11 +111,13 @@ dependencies; no manual virtual environment or pip installation is needed.
 ```sh
 cargo doc --workspace --no-deps --locked
 cargo test --workspace
+cargo test --workspace --all-features
 cargo test --workspace --release
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 uv run tools/c_format.py --check
 uv run tools/c_smoke.py
+python3 tools/c_micro.py
 python3 tools/cross_decode.py
 cargo run -p qr --example fuzz_smoke --release
 cargo run -p qr --example bench --release

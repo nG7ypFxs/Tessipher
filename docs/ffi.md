@@ -23,11 +23,20 @@ the pin. CI uses uv with the same inline dependencies for host and Zephyr checks
 cargo build -p qr-ffi --release --locked
 uv run tools/check_header.py
 uv run tools/c_smoke.py
+python3 tools/c_micro.py
+
+# Optional Micro QR C archives
+cargo build -p qr-ffi --release --features micro-qr --locked
+cargo build -p qr-ffi --release --features micro-qr-detect --locked
 
 # Cortex-M0 core and Cortex-M4 soft-float C library
 rustup target add thumbv6m-none-eabi thumbv7em-none-eabi
 cargo build -p qr-core --target thumbv6m-none-eabi --release
 cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release
+cargo build -p qr-ffi --no-default-features --features micro-qr \
+  --target thumbv7em-none-eabi --release
+cargo build -p qr-ffi --no-default-features --features micro-qr-detect \
+  --target thumbv7em-none-eabi --release
 ```
 
 Run the commands from the repository root. The host build produces
@@ -80,9 +89,27 @@ ABI structs and their field documentation are shared in `crates/qr-ffi/abi_schem
 ordinary Cargo builds do not need the formatter.
 `tools/check_header.py` formats that raw header using the root configuration before
 comparing it byte-for-byte with the distributed `include/tessipher.h`.
-The raw and distributed headers have the same declarations; their whitespace differs.
+For the default feature set, the raw and distributed headers have the same declarations;
+their whitespace differs before formatting. Optional-feature headers change only the
+feature macro values, which expose the matching guarded declarations.
 After intentional changes to the schema or header documentation, update the bundled copy with `uv run tools/check_header.py --write`.
 C declarations and an executable check are demonstrated in `examples/c_smoke.c`.
+
+Micro QR declarations and symbols follow the `qr-ffi` Cargo features. Every
+generated header defines `QR_HAS_MICRO_QR` and `QR_HAS_MICRO_QR_DETECT` as 0 or
+1 for its archive. `micro-qr-detect` also sets the matrix macro. These are
+numeric macros: use `#if QR_HAS_MICRO_QR`, not `#ifdef QR_HAS_MICRO_QR`, because
+the latter is also true when the value is 0. A contradictory pair with detection
+enabled and matrix decoding disabled is rejected by the header.
+
+The distributed header describes the default archive and sets both macros to 0.
+For an optional-feature archive, use its `OUT_DIR/tessipher.h`, or define the
+same 0/1 macro values before including the distributed header. Header macros and
+the linked archive must come from the same Cargo feature set. The additive Micro
+types remain declared for layout and shared-schema stability, while functions
+are visible only inside their matching `#if` blocks. `tools/c_micro.py` builds
+all three feature variants in separate target directories, compiles each header
+with its archive, checks exported symbols, and links an old ABI-1 header too.
 
 ## Choosing an entry point
 
@@ -94,6 +121,11 @@ payload length. The public API decodes at most one symbol per call.
 | `qr_default_config` | Write valid default finder/candidate/retry/scan/threshold settings. |
 | `qr_memory` | Validate configuration and query the linked image limits, buffer sizes, and target layouts. |
 | `qr_decode_matrix` | Decode already sampled packed modules; no detector scratch or config argument. |
+| `qr_micro_memory` | With `QR_HAS_MICRO_QR`, query Micro QR limits, scratch sizes, and additive layouts. |
+| `qr_decode_micro_matrix` | With `QR_HAS_MICRO_QR`, decode packed M1–M4 modules. |
+| `qr_decode_micro_gray` | With `QR_HAS_MICRO_QR_DETECT`, detect/decode Micro QR with default budget/sampling. |
+| `qr_decode_micro_gray_with_budget` | Micro QR Gray8 with an explicit pixel-read limit. |
+| `qr_decode_micro_gray_with_sampling` | Micro QR Gray8 with explicit sampling and optional `qr_stats`. |
 | `qr_decode_gray` | Decode a Gray8 image with default sampling and 64,000,000 pixel reads. |
 | `qr_decode_gray_with_budget` | Gray8 with an explicit pixel-read limit. |
 | `qr_decode_gray_with_sampling` | Gray8 with explicit pixel limit and sampling strategy, and optional `qr_stats`. |
@@ -137,6 +169,15 @@ Query memory again after changing configuration, especially `max_finders`, and
 resize storage as needed before decoding. Matrix input does not need detector
 storage, but querying memory still provides core/output/layout requirements.
 
+With `QR_HAS_MICRO_QR`, call `qr_micro_memory` for the separate Micro QR
+contract. Matrix scratch is 439 bytes, maximum payload is 35 bytes, and the
+conservative segment capacity is 16. When the archive lacks
+`micro-qr-detect`, `image_core_scratch_bytes` and `detector_scratch_bytes` are
+zero. A detection-enabled default configuration reports 7077 image-core bytes
+and 4557 detector bytes. The query also reports the target size and alignment
+of `qr_micro_result`, `qr_segment`, and `qr_stats`. These values are separate
+from the unchanged ABI-1 `qr_memory_info` layout.
+
 ## Input formats
 
 ### Packed module matrix
@@ -149,6 +190,15 @@ for a 21-module row the next row starts at bit 21, not bit 24. Unused final-byte
 bits do not represent modules. Do not include the surrounding quiet zone.
 Normal orientation has finders at top-left, top-right, and bottom-left; content
 failures trigger a transpose retry. There is no rotation search for matrix input.
+
+### Micro QR input
+
+`qr_decode_micro_matrix` accepts sides 11, 13, 15, and 17 for M1–M4. Packing is
+the same row-major, MSB-first, no-row-padding format as Model 2. Matrix decoding
+tries all four rotations and their reflected forms and reports the successful
+orientation. Gray8 Micro QR images should include the two-module quiet zone.
+The single-finder detector uses bounded affine geometry; strong projective
+distortion may return `QR_NOT_FOUND`.
 
 ### Gray8 image or ROI
 
@@ -241,6 +291,14 @@ order `(0,0)`, `(side,0)`, `(side,side)`, `(0,side)`. Corner order is retained a
 transpose decoding; it is not a reordered axis-aligned box, and no mirrored flag
 is provided. Matrix decoding sets all detection-only fields to zero.
 
+`qr_micro_result` reports Micro version 1–4, mask 0–3, corrected codewords,
+format BCH distance, and the successful `rotation` and `mirrored` orientation.
+Its `ec_level` is `QR_MICRO_EC_L/M/Q` for M2–M4 and the uint32 value
+`QR_MICRO_EC_NONE` for M1 detection-only parity. Gray8 results additionally set
+polarity, threshold, candidates, retries, and corners; matrix results leave
+those fields zero. The result remains untouched on every error. Segment modes
+and payload spans use the existing `qr_segment` representation.
+
 ## Return codes and recovery
 
 Never read a stale result after failure: `qr_result` is untouched on every error,
@@ -288,7 +346,8 @@ Do not modify the same storage from another thread, DMA, or an interrupt handler
 The FFI checks null pointers, alignment, length multiplication, `isize::MAX`, address addition, and overlap.
 Null is allowed only for zero-length byte/segment spans, which become empty Rust slices.
 Configuration, result, and memory-query output pointers are mandatory.
-Segment capacity is accepted up to the conservative bound of 5912.
+Segment capacity is accepted up to the queried conservative bound: 5912 for
+Model 2 and 16 for Micro QR.
 The library cannot validate an arbitrary pointer's allocation, lifetime, actual allocation size, or concurrent access.
 
 The result struct is written only on success.

@@ -43,6 +43,24 @@ A core transpose retry using the same sampled matrix does not consume another sa
 The first successfully decoded symbol is returned.
 There is no contract to enumerate every symbol in an image containing multiple codes.
 
+## Optional Micro QR detection
+
+The `micro-qr-detect` feature adds separate `decode_micro*` entry points and
+automatically enables `qr-core/micro-qr`. Existing `decode*` and tracking entry
+points continue to search only QR Model 2. This keeps `Detection`, tracker state,
+and ABI-1 C behavior stable.
+
+Micro QR search uses each retained finder independently. A finder is tested at
+four bounded angles and four inward quadrant choices, then at M1–M4 dimensions.
+Each detailed matrix sample consumes `max_retries`; each angle/quadrant choice
+consumes `max_candidates`; pixel reads and all four threshold/polarity passes
+use the existing shared budgets. `Config::scratch_bytes()` and its current
+minimum finder capacity of three are unchanged. The detector supports the
+standard two-module quiet zone, inversion, rectangular pixel pitch, right-angle
+rotation, and padded stride. One finder cannot constrain a distant projective
+corner as strongly as three Model 2 finders, so strong perspective remains a
+recognition limit.
+
 ## Perspective and alignment
 
 For V2 and above, the detector searches around the predicted bottom-right alignment center over ±8 modules on each axis, in 0.5-module steps.

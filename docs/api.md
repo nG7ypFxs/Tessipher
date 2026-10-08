@@ -14,6 +14,12 @@ When using the decoder from multiple tasks, give each task separate scratch and 
 | Payload | Up to 7089 bytes; may be smaller for the application | 1 |
 | Segments | An array of `Segment`; conservative all-input bound: 5912 entries | `align_of::<Segment>()` |
 
+With `qr-core/micro-qr`, matrix-only Micro QR decoding may instead use
+`MICRO_SCRATCH_BYTES` (439 bytes), a packed matrix of at most 37 bytes, and a
+payload of at most 35 bytes. The larger existing core scratch also satisfies
+this requirement. With `qr-detect/micro-qr-detect`, the detector intentionally
+reuses the existing scratch query and `Config` limits.
+
 Core scratch is divided into raw codewords (3706 bytes), data codewords (2956), one RS block (255), and RS workspace (160).
 Detector scratch holds only the packed matrix of up to 177×177 modules and finder records.
 It does not create a binary image, integral image, or additional frame proportional to image area.
@@ -52,6 +58,38 @@ A mirrored symbol can happen to have valid format information, so content errors
 No input modification or matrix copy is required; both attempts reuse scratch and output.
 `InvalidMatrix` and capacity errors do not trigger a retry.
 A capacity error from the transpose is returned directly; if both orientations fail with content errors, the normal-orientation error is returned.
+
+The `micro-qr` entry point accepts packed 11, 13, 15, and 17 module matrices.
+It tries four rotations and their reflected forms because Micro QR has one
+finder. `MicroDecoded.rotation` and `mirrored` report the transform used.
+
+## Optional Micro QR APIs
+
+`qr-core` feature `micro-qr` provides `MicroMatrix`, `decode_micro`, and
+`MicroDecoded`. The facade exports these as `MicroMatrix`,
+`decode_micro_matrix`, and `MicroDecoded`. M1 returns `ec_level: None` because
+its two parity codewords detect errors but do not correct them. M2–M4 return
+`MicroEcLevel::{L,M,Q}` as permitted by the version.
+
+`qr-detect` feature `micro-qr-detect` automatically enables the core feature
+and provides `decode_micro`, `decode_micro_with_stats`, and
+`decode_micro_with_sampling`; the facade names them `decode_micro_gray`,
+`decode_micro_gray_with_stats`, and `decode_micro_gray_with_sampling`.
+They return `MicroDetection` and leave the existing Model 2 `Detection` and
+entry points unchanged. Image detection uses one finder, bounded angle and
+version hypotheses, the existing threshold/polarity passes, and the same
+candidate, retry, pixel-read, and scratch limits. It is intended for one symbol
+with a two-module quiet zone; arbitrary lens distortion and occlusion remain
+outside the recognition guarantee.
+
+Micro QR supports Numeric in M1–M4, Alphanumeric in M2–M4, and Byte and Kanji
+in M3–M4. Byte output stays raw and Kanji output remains two-byte Shift_JIS.
+Micro QR has no ECI, FNC1, or Structured Append mode in this API. Segment ECI
+metadata remains the default value 3 for compatibility with `Segment`.
+
+The Micro reserve `p` limits accepted corrections per symbol: M1 0, M2-L 1,
+M2-M 2, M3-L 2, M3-M 4, M4-L 3, M4-M 5, and M4-Q 7 codewords. Full syndromes
+and post-correction checks still use every parity codeword.
 
 ## Decoded results
 

@@ -368,6 +368,54 @@ undecodable frame. One host run measured medians of 2,041 μs and 34,637 μs,
 respectively; host timing varies and does not establish MCU worst-case cycles.
 Pixel reads and fixed tracker storage are the primary reproducible measures.
 
+## Optional Micro QR decoding and detection (2026-10-08)
+
+Cargo feature `micro-qr` adds a dedicated Rust matrix API for M1–M4 without
+changing the existing Model 2 types or behavior. Feature `micro-qr-detect`
+forwards `qr-core/micro-qr`, adds separate single-finder Gray8 entry points, and
+is also forwarded by the `qr` facade. Default builds keep both features off.
+Existing ABI-1 C types, functions, statuses, and symbols remain unchanged; an
+additive feature-gated Micro QR C surface is recorded below.
+
+JIS X 0510:2026 sections 7.5, 7.6, 7.7, 7.8, and 7.9.2 were checked directly.
+The implementation uses the M1–M4 dimensions, single function-pattern geometry,
+15-bit Micro format information and XOR mask 0x4445, masks 00–11, mode/count
+widths, M1/M3 final four-bit data codeword, and the Table 9 reserve `p` values.
+The accepted correction limits are M1 0, M2-L 1, M2-M 2, M3-L 2, M3-M 4,
+M4-L 3, M4-M 5, and M4-Q 7 codewords. M1 reports no ECC level and rejects any
+nonzero syndrome.
+
+The reproducible Segno 1.6.6 corpus contains 100 vectors covering every legal
+version/ECC/mode/mask combination plus 25 exact published capacity boundaries.
+All 125 decode in four rotations and their reflected forms. Tests cover
+three-bit format BCH correction, known four-bit rejection, malformed and
+truncated payloads, caller capacity, M1 error detection, and every M2–M4 RS
+correction boundary plus one rejected codeword beyond it.
+
+Image tests cover M1–M4, all right-angle rotations, normal/inverted polarity,
+3×5 and 5×3 module pitch, 45-degree rotation, reflection, bounded grayscale
+noise, padded stride, finder-only and blank rejection, exact pixel budgets,
+candidate/retry budgets, and output/segment capacity failures. The Micro image
+path uses an affine projection derived from one finder; strong perspective is a
+documented recognition limit because one finder does not constrain the remote
+corner like the three Model 2 finders. Matrix and image allocation monitoring
+reported zero allocations.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --workspace --locked` | Passed; default Model 2 regression unchanged |
+| `cargo test --workspace --all-features --locked` | Passed, including 125 Micro matrices × 8 orientations and Micro image tests |
+| `cargo test --workspace --all-features --release --locked` | Passed |
+| `cargo +1.85.1 check --workspace --all-features --locked` | Passed on the declared MSRV |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | Passed |
+| `RUSTDOCFLAGS='-D warnings -D missing_docs' cargo doc --workspace --all-features --no-deps --locked` | Passed |
+| `cargo build -p qr-core --features micro-qr --target thumbv6m-none-eabi --release --locked` | Passed |
+| `cargo build -p qr-detect --features micro-qr-detect --target thumbv6m-none-eabi --release --locked` | Passed |
+| `cargo check -p qr --features micro-qr-detect --target wasm32-unknown-unknown --locked` | Passed |
+| `uv run tools/c_smoke.py` | Header/layout/symbol behavior passed; core 7077, detector 4557, alignment 1 unchanged |
+| `python3 tools/check_symbols.py` | No allocator or unwind imports in the Cortex archive |
+
 Private photo checks used temporary PGM inputs outside the repository. No input
 photos, payload bytes, URLs, or credentials were stored in the repository or test
 fixtures, and no decoded URL was accessed. Photo 2's 384×384 ROI changes from
@@ -426,3 +474,51 @@ no-allocation restoration were added.
 | `cargo run -p qr --example fuzz_smoke --release` | 20,000 payload / 10,000 matrix / 200 image cases; no panics |
 
 Existing FNC1 and Rust sampling/tracking changes remain intact. Actual MCU cycle/stack and camera-rate evaluation remains outstanding.
+
+## Feature-gated Micro QR C API (2026-10-08)
+
+The `qr-ffi` features `micro-qr` and `micro-qr-detect` forward the corresponding
+Rust facade features. Generated headers define numeric `QR_HAS_MICRO_QR` and
+`QR_HAS_MICRO_QR_DETECT` values for the linked archive and place additive
+function declarations in matching `#if` blocks. The default header and archive
+export no Micro QR functions. Matrix-only builds export the memory query and
+matrix decoder; detection builds export those plus the three Gray8 entry points.
+All existing ABI-1 type layouts, status values, function declarations, and
+symbols are unchanged.
+
+The additive memory query reports 439 bytes for matrix core scratch, 35 payload
+bytes, and 16 conservative segment entries. Matrix-only archives report zero
+image/detector scratch. Detection-enabled archives report 7077 image-core bytes
+and 4557 detector bytes for the default configuration. `qr_micro_result` carries
+M1–M4 version, the uint32 M1 no-ECC sentinel, mask, correction/format metadata,
+rotation/reflection, detection flags/counters, and corners.
+
+The C suite builds default, matrix-only, and detection archives into separate
+target directories and compiles each generated header with its matching archive.
+It decodes M1–M4 matrices and normal/inverted padded-stride images; checks
+sampling and pixel limits; rejects short scratch/output/segments, malformed
+matrix spans, overlap, misalignment, excessive capacity, and invalid config;
+and preserves result/stat canaries according to the documented write contract.
+It compares generated headers after normalizing only feature values and checks
+the exact feature-gated symbol sets. An old caller is compiled with the checked-in
+header captured from baseline commit `3a2c8ee4dc800e75b0059b443bfcd5b2eba0fc5d` and linked/run against all three
+new archives. A Rust allocator monitor calls the exported C matrix and image
+wrappers and observed zero allocations.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --workspace --locked` | Passed; default behavior unchanged |
+| `cargo test --workspace --all-features --locked` | Passed, including Micro C allocation monitor |
+| `cargo test --workspace --all-features --release --locked` | Passed |
+| `cargo +1.85.1 check -p qr-ffi --all-features --locked` | Passed on declared MSRV |
+| `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | Passed |
+| `RUSTDOCFLAGS='-D warnings -D missing_docs' cargo doc --workspace --all-features --no-deps --locked` | Passed |
+| `uv run tools/c_format.py --check` / `uv run tools/check_header.py` | Passed; distributed default header matches generated default |
+| `python3 tools/c_micro.py` | Three header/archive variants, C behavior, symbol gates, and old ABI-1 caller passed |
+| `uv run tools/c_smoke.py` | Existing matrix/image/sampling/tracker C tests passed |
+| Three `thumbv7em-none-eabi` no-host builds: default, `micro-qr`, `micro-qr-detect` | Passed |
+| `tools/check_symbols.py` on all three Cortex archives | No allocator or unwind imports |
+
+The Micro image path retains its affine single-finder geometry, so strong
+projective distortion remains a documented recognition limitation. Physical MCU
+cycle/stack measurements and real-camera recognition rates remain outstanding.

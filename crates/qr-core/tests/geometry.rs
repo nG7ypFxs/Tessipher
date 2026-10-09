@@ -4,8 +4,7 @@ use qr_core::{alignment_positions, is_function, raw_codewords};
 // This catches errors at finder exclusions, timing intersections and band boundaries.
 fn pairwise_reference(version: u8, x: usize, y: usize) -> bool {
     let side = version as usize * 4 + 17;
-    if (x < 9 && y < 9)
-        || (x < 9 && y >= side - 8)
+    if (x < 9 && (y < 9 || y >= side - 8))
         || (y < 9 && x >= side - 8)
         || x == 6
         || y == 6

@@ -556,12 +556,7 @@ impl VersionGeometry {
         if x >= side || y >= side {
             return true;
         }
-        if (x < 9 && y < 9)
-            || (x < 9 && y >= side - 8)
-            || (y < 9 && x >= side - 8)
-            || x == 6
-            || y == 6
-        {
+        if (x < 9 && (y < 9 || y >= side - 8)) || (y < 9 && x >= side - 8) || x == 6 || y == 6 {
             return true;
         }
         if self.version >= 7 && ((y < 6 && x >= side - 11) || (x < 6 && y >= side - 11)) {
@@ -639,12 +634,14 @@ fn nearest(a: u32, b: u32, lo: u8, hi: u8, word: fn(u8) -> u32) -> Option<(u8, u
     for v in lo..=hi {
         let code = word(v);
         let d = (a ^ code).count_ones().min((b ^ code).count_ones()) as u8;
-        if d < best {
-            best = d;
-            value = v;
-            ambiguous = false;
-        } else if d == best {
-            ambiguous = true;
+        match d.cmp(&best) {
+            core::cmp::Ordering::Less => {
+                best = d;
+                value = v;
+                ambiguous = false;
+            }
+            core::cmp::Ordering::Equal => ambiguous = true,
+            core::cmp::Ordering::Greater => {}
         }
     }
     if best <= 3 && !ambiguous {

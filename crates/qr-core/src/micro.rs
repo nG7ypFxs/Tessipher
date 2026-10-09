@@ -342,12 +342,14 @@ fn read_format(matrix: Oriented<'_>) -> Result<(u8, u8), Error> {
     let mut ambiguous = false;
     for candidate in 0..32u8 {
         let distance = (observed ^ format_word(candidate)).count_ones() as u8;
-        if distance < best {
-            best = distance;
-            value = candidate;
-            ambiguous = false;
-        } else if distance == best {
-            ambiguous = true;
+        match distance.cmp(&best) {
+            core::cmp::Ordering::Less => {
+                best = distance;
+                value = candidate;
+                ambiguous = false;
+            }
+            core::cmp::Ordering::Equal => ambiguous = true,
+            core::cmp::Ordering::Greater => {}
         }
     }
     if best <= 3 && !ambiguous {

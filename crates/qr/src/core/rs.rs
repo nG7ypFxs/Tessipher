@@ -1,4 +1,4 @@
-use crate::Error;
+use super::Error;
 pub(crate) const WORK_BYTES: usize = 32 * 5;
 const fn field() -> ([u8; 255], [u8; 256]) {
     let mut exp = [0; 255];

@@ -20,7 +20,7 @@ def main():
     args = parser.parse_args()
     executable = find_formatter()
     build = subprocess.run(
-        ["cargo", "build", "-p", "qr-ffi", "--release", "--locked", "--message-format=json"],
+        ["cargo", "build", "-p", "tessipher-ffi", "--release", "--locked", "--message-format=json"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         text=True,
@@ -30,10 +30,10 @@ def main():
     paths = [
         pathlib.Path(record["out_dir"]) / "tessipher.h"
         for record in records
-        if record["reason"] == "build-script-executed" and "qr-ffi" in record["package_id"]
+        if record["reason"] == "build-script-executed" and "tessipher-ffi" in record["package_id"]
     ]
     if len(paths) != 1:
-        raise RuntimeError(f"Expected one qr-ffi generated header, found {paths}")
+        raise RuntimeError(f"Expected one tessipher-ffi generated header, found {paths}")
     bundled = ROOT / "include/tessipher.h"
     generated = format_bytes(executable, paths[0].read_bytes(), bundled)
     if args.write:

@@ -3,27 +3,12 @@
 version = 4
 
 [[package]]
-name = "qr"
-version = "0.1.0"
-dependencies = [
- "qr-core",
- "qr-detect",
-]
-
-[[package]]
-name = "qr-core"
+name = "tessipher"
 version = "0.1.0"
 
 [[package]]
-name = "qr-detect"
+name = "tessipher-ffi"
 version = "0.1.0"
 dependencies = [
- "qr-core",
-]
-
-[[package]]
-name = "qr-ffi"
-version = "0.1.0"
-dependencies = [
- "qr",
+ "tessipher",
 ]

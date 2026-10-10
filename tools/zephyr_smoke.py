@@ -74,7 +74,7 @@ def main():
                ZEPHYR_TOOLCHAIN_VARIANT="zephyr")
     run_checked(["uv", "run", "tools/check_header.py"], env=env)
     # --target-dir isolates embedded artifacts even if CARGO_TARGET_DIR is set.
-    run_checked(["cargo", "build", "-p", "qr-ffi", "--no-default-features", "--release",
+    run_checked(["cargo", "build", "-p", "tessipher-ffi", "--no-default-features", "--release",
                  "--locked", "--target", "thumbv7m-none-eabi", "--target-dir", str(out / "rust")], env=env)
     archive = out / "rust/thumbv7m-none-eabi/release/libqr_ffi.a"
     run_checked([sys.executable, str(zephyr / "scripts/twister"),

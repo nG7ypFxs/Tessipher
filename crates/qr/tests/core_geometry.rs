@@ -1,4 +1,4 @@
-use qr_core::{alignment_positions, is_function, raw_codewords};
+use qr::core::{alignment_positions, is_function, raw_codewords};
 
 // The pre-cache pairwise reference deliberately visits every alignment center pair.
 // This catches errors at finder exclusions, timing intersections and band boundaries.

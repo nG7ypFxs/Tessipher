@@ -28,7 +28,7 @@ def build(name, cargo_args):
         "cargo",
         "build",
         "-p",
-        "qr-ffi",
+        "tessipher-ffi",
         "--release",
         "--locked",
         "--target-dir",
@@ -41,10 +41,10 @@ def build(name, cargo_args):
     headers = [
         pathlib.Path(record["out_dir"]) / "tessipher.h"
         for record in records
-        if record["reason"] == "build-script-executed" and "qr-ffi" in record["package_id"]
+        if record["reason"] == "build-script-executed" and "tessipher-ffi" in record["package_id"]
     ]
     if len(headers) != 1:
-        raise RuntimeError(f"expected one generated qr-ffi header for {name}, got {headers}")
+        raise RuntimeError(f"expected one generated tessipher-ffi header for {name}, got {headers}")
     return target / "release" / "libqr_ffi.a", headers[0]
 
 

@@ -1,13 +1,17 @@
-//! Embedded QR integration facade with caller-owned memory and no heap allocation.
+//! Embedded QR decoding with caller-owned memory and no heap allocation.
 //!
-//! [`core`] decodes sampled QR Model 2 matrices independently of image processing.
-//! [`detect`] scans borrowed Gray8 regions and returns the first decoded symbol.
-//! Use [`memory_requirements`] to size scratch, then [`decode_matrix`] or
-//! [`decode_gray`] with reusable caller-owned payload and segment buffers.
-//! On success, read only the lengths reported by [`Decoded`]; writable buffers
-//! have unspecified contents after failure.
+//! The [`core`] module decodes sampled QR Model 2 matrices. The optional
+//! image-detection module scans a borrowed Gray8 region and is enabled by default
+//! through the `detect` feature. Disable default features for matrix-only
+//! builds; enable `micro-qr` for Micro QR matrix decoding and
+//! `micro-qr-detect` for Micro QR image detection.
+//!
+//! The package is published as `tessipher` while its stable Rust library name
+//! remains `qr`, so applications can write `use qr::core::Matrix;`.
 //!
 //! ```
+//! # #[cfg(feature = "detect")]
+//! # fn main() -> Result<(), qr::detect::Error> {
 //! use qr::{Config, GrayImage, Segment};
 //! let config = Config::<8, 8>::default();
 //! let required = qr::memory_requirements(&config)?;
@@ -22,29 +26,39 @@
 //! let result = qr::decode_gray(image, &config, &mut detector_scratch,
 //!     &mut core_scratch, &mut payload, &mut segments);
 //! assert_eq!(result, Err(qr::detect::Error::NotFound));
-//! # Ok::<(), qr::detect::Error>(())
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "detect"))]
+//! # fn main() {}
 //! ```
 #![no_std]
 #![forbid(unsafe_code)]
-pub use qr_core as core;
-pub use qr_core::{decode as decode_matrix, Decoded, Matrix, Segment};
+
+pub mod core;
+#[cfg(feature = "detect")]
+pub mod detect;
+
+pub use core::{decode as decode_matrix, Decoded, Matrix, Segment};
 #[cfg(feature = "micro-qr")]
-pub use qr_core::{
+pub use core::{
     decode_micro as decode_micro_matrix, MicroDecoded, MicroEcLevel, MicroMatrix, MicroVersion,
 };
-pub use qr_detect as detect;
-pub use qr_detect::{
+
+#[cfg(feature = "detect")]
+pub use detect::{
     decode as decode_gray, decode_with_sampling as decode_gray_with_sampling,
     decode_with_stats as decode_gray_with_stats, Config, DefaultConfig, Detection, GrayImage, Rect,
     SamplingStrategy, Stats, TrackHint, Tracker, TrackerState, TrackerStats,
 };
-#[cfg(feature = "micro-qr-detect")]
-pub use qr_detect::{
+#[cfg(all(feature = "detect", feature = "micro-qr-detect"))]
+pub use detect::{
     decode_micro as decode_micro_gray,
     decode_micro_with_sampling as decode_micro_gray_with_sampling,
     decode_micro_with_stats as decode_micro_gray_with_stats, MicroDetection,
 };
+
 /// Scratch requirements are independent of configured image dimensions.
+#[cfg(feature = "detect")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryRequirements {
     /// Core scratch bytes for matrix decoding.
@@ -54,10 +68,12 @@ pub struct MemoryRequirements {
     /// Required alignment for both byte scratch buffers.
     pub alignment: usize,
 }
+
 /// Returns scratch requirements after validating all configuration settings.
 ///
 /// Does not include payload or segment storage. Returns [`detect::Error::InvalidConfig`]
 /// for invalid budgets or compile-time dimensions.
+#[cfg(feature = "detect")]
 pub fn memory_requirements<const W: usize, const H: usize>(
     config: &Config<W, H>,
 ) -> Result<MemoryRequirements, detect::Error> {

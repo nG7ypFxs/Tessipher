@@ -2,16 +2,27 @@
 
 Tessipher is a QR reader for embedded systems, with QR Model 2 enabled by
 default and optional Micro QR support.
-Its Rust runtime crates have no external dependencies and run with `no_std` and no heap allocation.
+Its Rust runtime has no external dependencies and runs with `no_std` and no heap allocation.
 The caller owns the image, scratch storage, and decoded output.
 The minimum supported Rust version is 1.85, and the license is MIT OR Apache-2.0 (see [THIRD_PARTY.md](THIRD_PARTY.md) for the separate licenses of reference test code).
+The published Rust package is `tessipher`; its established library name remains
+`qr`, with matrix decoding under `qr::core` and image detection under
+`qr::detect`. The repository-only `tessipher-ffi` crate preserves the C ABI.
 
-| Crate | Role |
+```toml
+[dependencies]
+qr = { package = "tessipher", version = "0.1.0" }
+```
+
+This install snippet is for the planned first crates.io release; publication is
+intentionally a separate step. Until then, use the repository checkout or a
+path dependency.
+
+| Module/crate | Role |
 | --- | --- |
-| `qr-core` | Decodes sampled module matrices, independently of image processing |
-| `qr-detect` | Scans Gray8 images, detects finders, corrects perspective, samples modules, and decodes at most one symbol |
-| `qr` | Re-exports both APIs and reports scratch requirements |
-| `qr-ffi` | Provides an allocator-free C ABI, memory queries, and a generated C header |
+| `tessipher` (`qr::core`) | Decodes sampled module matrices independently of image processing |
+| `tessipher` (`qr::detect`) | Scans Gray8 images, detects finders, corrects perspective, samples modules, and decodes at most one symbol |
+| `tessipher-ffi` (`qr_ffi`) | Repository-only allocator-free C ABI, memory queries, and generated header |
 
 ## Supported features
 
@@ -28,8 +39,9 @@ Structured Append returns index/total/parity metadata; joining symbols is the ca
 The Cargo feature `micro-qr` adds sampled-matrix decoding for Micro QR M1–M4.
 It supports all legal Micro QR error-correction levels, masks 0–3, Numeric,
 Alphanumeric, Byte, and Kanji modes. `micro-qr-detect` adds bounded single-finder
-Gray8 detection and automatically enables `micro-qr`. Both features are opt-in,
-so default builds retain the Model 2 code path and behavior.
+Gray8 detection and automatically enables `micro-qr`. The `detect` feature is
+enabled by default. Use `default-features = false` for matrix-only builds;
+`micro-qr-detect` enables `detect` and `micro-qr` as well.
 
 Gray8 input is a borrowed rectangular view.
 For example, a ROI of width 640 with stride 1920 can be passed without copying the image.
@@ -39,6 +51,10 @@ The repository includes synthetic image tests for mirrors, rotation, perspective
 Matrix decoding retries the transpose after a normal-orientation content failure.
 Reed–Solomon correction adopts the recommended parity reserve p in standard section 7.5.1, limiting V1-L to two corrected codewords per block and V1-M/V2-L to four.
 See the [detection specification](docs/detection.md) for the search envelope and budgets.
+
+The [crates.io release procedure](docs/release.md) documents archive checks,
+SSH-signed release tags, the single-package publication, and feature-matched C
+header retrieval. Publishing is a deliberate manual step.
 
 rMQR, Model 1, returning multiple symbols, character-set conversion, camera control, and image-file loading are outside the public library's scope.
 
@@ -65,7 +81,8 @@ With the default configuration, core scratch is **7077 bytes**, detector scratch
 Allocate these regions in a task arena or dedicated firmware RAM and reuse them across calls.
 The API does not construct a large owned Scratch value that must be copied onto the stack.
 
-For matrix-only decoding, use `qr_core::Matrix::new(bits, side)` and `qr_core::decode(...)`.
+For matrix-only decoding, use `qr::core::Matrix::new(bits, side)` and
+`qr::decode_matrix(...)` (or `qr::core::decode(...)`).
 Bits are packed row-major, most-significant bit first, without padding between rows.
 The side length is `17 + 4 × version`, from 21 to 177 modules.
 See [memory and decoding APIs](docs/api.md) for output contracts and errors.
@@ -81,7 +98,7 @@ caller-owned storage without changing existing ABI-1 types or symbols.
 Build the host static library and run the C checks from the repository root:
 
 ```sh
-cargo build -p qr-ffi --release --locked
+cargo build -p tessipher-ffi --release --locked
 uv run tools/c_smoke.py
 ```
 
@@ -93,7 +110,7 @@ The complete [C example](examples/c_decode.c) decodes a repository fixture;
 [C integration](docs/ffi.md) covers compile/link commands, ROI layout, budgets,
 output interpretation, every status code, and firmware builds.
 
-For Micro QR C matrix decoding, build `qr-ffi` with `--features micro-qr` and
+For Micro QR C matrix decoding, build `tessipher-ffi` with `--features micro-qr` and
 use the generated header from that Cargo build. For Gray8 detection, use
 `--features micro-qr-detect`; it enables matrix support too. The header defines
 numeric `QR_HAS_MICRO_QR` and `QR_HAS_MICRO_QR_DETECT` macros, so guard code
@@ -110,21 +127,22 @@ dependencies; no manual virtual environment or pip installation is needed.
 
 ```sh
 cargo doc --workspace --no-deps --locked
-cargo test --workspace
-cargo test --workspace --all-features
-cargo test --workspace --release
+cargo test --workspace --locked
+cargo test --workspace --all-features --locked
+cargo test --workspace --all-features --release --locked
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 uv run tools/c_format.py --check
 uv run tools/c_smoke.py
 python3 tools/c_micro.py
 python3 tools/cross_decode.py
-cargo run -p qr --example fuzz_smoke --release
-cargo run -p qr --example bench --release
-cargo run -p qr --example read_pgm --release -- fixtures/perspective-strong-v1.pgm
+cargo run -p tessipher --example fuzz_smoke --release
+cargo run -p tessipher --example bench --release
+cargo run -p tessipher --example read_pgm --release -- fixtures/perspective-strong-v1.pgm
 ```
 
-`cargo doc` generates English API documentation for all four crates.
+`cargo doc` generates English API documentation for the public `tessipher`
+crate and the repository-only FFI crate.
 The examples in the crate documentation run as doctests; CI also rejects undocumented public API items and rustdoc warnings.
 The validation fixtures include 1280 Nayuki-generated matrices and an independent set of 24 mode/version-boundary matrices generated with Segno 1.6.6.
 

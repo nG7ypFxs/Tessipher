@@ -1,5 +1,5 @@
 // QR block parameter tables, sourced from Nayuki QR-Code-generator (MIT).
-// See THIRD_PARTY.md and tools/vendor/qrcodegen.py.
+// See THIRD_PARTY.md for the source, license, and provenance.
 pub(crate) const ECC: [[u8; 41]; 4] = [
     [
         0, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28,

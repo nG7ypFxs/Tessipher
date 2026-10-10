@@ -304,7 +304,7 @@ enum qr_mode {
 /* Status: 0 success; 1 invalid numeric pointer/length/alignment argument;
  * 2 overlapping buffers; 10 invalid image; 11 image too large; 12 invalid config;
  * 13 detector scratch shortage; 14 finder capacity; 15 candidate budget;
- * 16 retry budget; 17 no symbol; 18 pixel-read budget; 101..110 core errors in qr_core::Error
+ * 16 retry budget; 17 no symbol; 18 pixel-read budget; 101..110 core errors in qr::core::Error
  * order. ECC values: 0=L, 1=M, 2=Q, 3=H. Mode values are QR mode indicator numbers. FNC1: 0=none,
  * 1=first, 2=second. SA index is zero based, total is 1..16. qr_segment.eci is the last ECI number
  * encountered, initially 3, not an active set. ECI control segments retain every assignment in

@@ -1,6 +1,6 @@
 #![cfg(feature = "micro-qr")]
 
-use qr_core::{
+use qr::core::{
     decode_micro, Error, MicroDecoded, MicroMatrix, MicroVersion, Segment, MICRO_MAX_PAYLOAD_BYTES,
     MICRO_SCRATCH_BYTES,
 };

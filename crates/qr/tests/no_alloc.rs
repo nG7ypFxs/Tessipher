@@ -1,3 +1,5 @@
+#![cfg(feature = "detect")]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

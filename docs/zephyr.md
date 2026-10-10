@@ -77,7 +77,7 @@ The runner verifies the pinned Zephyr commit and SDK version, checks the generat
 C header, and builds Rust first with:
 
 ```sh
-cargo build -p qr-ffi --no-default-features --release --locked \
+cargo build -p tessipher-ffi --no-default-features --release --locked \
   --target thumbv7m-none-eabi --target-dir target/zephyr-ffi/rust
 ```
 

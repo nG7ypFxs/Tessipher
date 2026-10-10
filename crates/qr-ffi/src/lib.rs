@@ -10,7 +10,7 @@
 //! arguments, and 2 for overlapping nonempty ranges. Detector errors are 10..=18:
 //! invalid image, oversized image, invalid config, short detector scratch, finder
 //! capacity, candidate budget, retry budget, not found, and pixel-read budget. Core errors are
-//! `100 + qr_core::Error` (101..=110). Result structs are written only on success.
+//! `100 + qr::core::Error` (101..=110). Result structs are written only on success.
 //! Buffer contents are unspecified on error; only returned prefixes are valid on
 //! success. Numeric checks cannot establish pointer allocation validity.
 //!

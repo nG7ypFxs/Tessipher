@@ -46,7 +46,7 @@ There is no contract to enumerate every symbol in an image containing multiple c
 ## Optional Micro QR detection
 
 The `micro-qr-detect` feature adds separate `decode_micro*` entry points and
-automatically enables `qr-core/micro-qr`. Existing `decode*` and tracking entry
+automatically enables the crate's `detect` and `micro-qr` features. Existing `decode*` and tracking entry
 points continue to search only QR Model 2. This keeps `Detection`, tracker state,
 and ABI-1 C behavior stable.
 
@@ -82,7 +82,7 @@ These cases do not guarantee success under arbitrary anisotropic or perspective 
 The current fixed corpus covers 17°, 45°, and quarter-turn rotations, strong V1 perspective, V7 alignment-based perspective, inverted polarity, lighting gradients, and mild random noise.
 The strong-perspective V1 fixture fails the affine attempt and succeeds through fourth-point search.
 The local-threshold fixture fails global thresholds and succeeds on the third pass.
-Fixture coordinates, lighting formulas, and random seeds are recorded in `tools/generate_fixtures.py` and `crates/qr-detect/tests/images.rs`.
+Fixture coordinates, lighting formulas, and random seeds are recorded in `tools/generate_fixtures.py` and `crates/qr/tests/images.rs`.
 
 ## Computational bounds and operational limits
 

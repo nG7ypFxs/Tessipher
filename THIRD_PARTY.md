@@ -9,7 +9,7 @@ None of the C or Python reference implementations are linked into the Rust runti
 Source: <https://github.com/nayuki/QR-Code-generator/blob/master/python/qrcodegen.py>
 Retrieved 2026-10-07; the exact vendored bytes are recorded in `tools/vendor/SHA256SUMS`.
 `tools/vendor/qrcodegen.py` is unmodified and retains its complete copyright and permission notice.
-The ECC codewords-per-block and block-count tables in `crates/qr-core/src/tables.rs` were transcribed from this source.
+The ECC codewords-per-block and block-count tables in `crates/qr/src/core/tables.rs` were transcribed from this source.
 Fixtures are generated with this independent encoder; `tools/generate_fixtures.py` records the payload and geometry choices.
 
 Copyright (c) Project Nayuki. (MIT License)

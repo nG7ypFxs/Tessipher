@@ -36,7 +36,7 @@ Counters and outcomes are deterministic and checked between samples.
 Reproduce:
 
 ```sh
-cargo run -p qr --example sampling_bench --release
+cargo run -p tessipher --example sampling_bench --release
 python3 tools/c_sampling_bench.py
 ```
 

@@ -1,6 +1,6 @@
 //! Opt-in Micro QR matrix decoding.
 
-use crate::{rs, Error, Mode, Segment};
+use super::{rs, Error, Mode, Segment};
 
 /// Largest Micro QR side length, in modules (M4, 17 modules).
 pub const MICRO_MAX_SIDE: usize = 17;

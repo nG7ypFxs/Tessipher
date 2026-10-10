@@ -2,22 +2,22 @@
 
 ## Ownership and sizes
 
-The three safe Rust crates use `#![forbid(unsafe_code)]`.
+The public Rust crate uses `#![forbid(unsafe_code)]`.
 Input is borrowed as `&[u8]`; scratch and payload output use `&mut [u8]`, and segments use `&mut [Segment]`.
 The implementation uses no recursion, mutable globals, or dynamic allocation.
 When using the decoder from multiple tasks, give each task separate scratch and output storage.
 
 | Region | Required size | Alignment |
 | --- | ---: | ---: |
-| Core scratch | `qr_core::SCRATCH_BYTES` = 7077 bytes | 1 |
+| Core scratch | `qr::core::SCRATCH_BYTES` = 7077 bytes | 1 |
 | Detector scratch | `3917 + 20 × max_finders` bytes | 1 |
 | Payload | Up to 7089 bytes; may be smaller for the application | 1 |
 | Segments | An array of `Segment`; conservative all-input bound: 5912 entries | `align_of::<Segment>()` |
 
-With `qr-core/micro-qr`, matrix-only Micro QR decoding may instead use
+With the `tessipher` package's `micro-qr` feature, matrix-only Micro QR decoding may instead use
 `MICRO_SCRATCH_BYTES` (439 bytes), a packed matrix of at most 37 bytes, and a
 payload of at most 35 bytes. The larger existing core scratch also satisfies
-this requirement. With `qr-detect/micro-qr-detect`, the detector intentionally
+this requirement. With the `tessipher` package's `micro-qr-detect` feature, the detector intentionally
 reuses the existing scratch query and `Config` limits.
 
 Core scratch is divided into raw codewords (3706 bytes), data codewords (2956), one RS block (255), and RS workspace (160).
@@ -65,13 +65,14 @@ finder. `MicroDecoded.rotation` and `mirrored` report the transform used.
 
 ## Optional Micro QR APIs
 
-`qr-core` feature `micro-qr` provides `MicroMatrix`, `decode_micro`, and
+The `tessipher` package's `micro-qr` feature provides `MicroMatrix`, `decode_micro`, and
 `MicroDecoded`. The facade exports these as `MicroMatrix`,
 `decode_micro_matrix`, and `MicroDecoded`. M1 returns `ec_level: None` because
 its two parity codewords detect errors but do not correct them. M2–M4 return
 `MicroEcLevel::{L,M,Q}` as permitted by the version.
 
-`qr-detect` feature `micro-qr-detect` automatically enables the core feature
+The `tessipher` package's `micro-qr-detect` feature automatically enables the
+`micro-qr` and `detect` features
 and provides `decode_micro`, `decode_micro_with_stats`, and
 `decode_micro_with_sampling`; the facade names them `decode_micro_gray`,
 `decode_micro_gray_with_stats`, and `decode_micro_gray_with_sampling`.
@@ -118,7 +119,7 @@ ECI accepts one-, two-, and three-byte representations up to 999999.
 
 ## Parsing corrected codewords
 
-Use `qr_core::parse_payload_info` for corrected data codewords obtained from another demodulator.
+Use `qr::core::parse_payload_info` for corrected data codewords obtained from another demodulator.
 Its `PayloadInfo` fields match `Decoded`: `payload_len`, `segment_count`, `fnc1`, and `structured_append`.
 It does not contain matrix version, ECC level, mask, correction counts, or BCH distances.
 Version must be 1–40, and data length must not exceed `MAX_DATA_CODEWORDS`.
@@ -180,7 +181,7 @@ Even when normal orientation fails with this conflict, a successful transpose de
 
 ## Opt-in sampling and caller-owned tracking
 
-`qr_detect::decode_with_sampling(image, config, strategy, scratch, core_scratch,
+`qr::detect::decode_with_sampling(image, config, strategy, scratch, core_scratch,
 output, segments, stats)` is also exported as `qr::decode_gray_with_sampling`.
 `SamplingStrategy::Center` preserves the legacy path. `CenterThenMajority5`
 retries only after a complete center matrix sample fails core content decoding;

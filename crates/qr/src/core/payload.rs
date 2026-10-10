@@ -1,4 +1,4 @@
-use crate::{Error, Fnc1, Mode, PayloadInfo, Segment, StructuredAppend};
+use super::{Error, Fnc1, Mode, PayloadInfo, Segment, StructuredAppend};
 const ALPHA: &[u8; 45] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
 struct Bits<'a> {
     data: &'a [u8],

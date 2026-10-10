@@ -20,22 +20,22 @@ the pin. CI uses uv with the same inline dependencies for host and Zephyr checks
 
 ```sh
 # Static library for host C tests
-cargo build -p qr-ffi --release --locked
+cargo build -p tessipher-ffi --release --locked
 uv run tools/check_header.py
 uv run tools/c_smoke.py
 python3 tools/c_micro.py
 
 # Optional Micro QR C archives
-cargo build -p qr-ffi --release --features micro-qr --locked
-cargo build -p qr-ffi --release --features micro-qr-detect --locked
+cargo build -p tessipher-ffi --release --features micro-qr --locked
+cargo build -p tessipher-ffi --release --features micro-qr-detect --locked
 
 # Cortex-M0 core and Cortex-M4 soft-float C library
 rustup target add thumbv6m-none-eabi thumbv7em-none-eabi
-cargo build -p qr-core --target thumbv6m-none-eabi --release
-cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release
-cargo build -p qr-ffi --no-default-features --features micro-qr \
+cargo build -p tessipher --no-default-features --target thumbv6m-none-eabi --release
+cargo build -p tessipher-ffi --no-default-features --target thumbv7em-none-eabi --release
+cargo build -p tessipher-ffi --no-default-features --features micro-qr \
   --target thumbv7em-none-eabi --release
-cargo build -p qr-ffi --no-default-features --features micro-qr-detect \
+cargo build -p tessipher-ffi --no-default-features --features micro-qr-detect \
   --target thumbv7em-none-eabi --release
 ```
 
@@ -73,18 +73,18 @@ directory). Firmware linking uses the board's linker script and target toolchain
 not these host system libraries. Physical MCU integration has not been validated.
 For a Zephyr RTOS execution check, see [Zephyr and QEMU](zephyr.md).
 
-The default `host` feature of `qr-ffi` links std for host staticlib tests.
+The default `host` feature of `tessipher-ffi` links std for host staticlib tests.
 Use `--no-default-features --release` for firmware.
 The no-host staticlib includes a panic handler that loops indefinitely if a panic occurs and does not unwind into C.
 Linking this rlib alongside another Rust panic handler is not an intended use.
 For direct use from Rust firmware, link `qr` or the individual safe crates instead.
 
 The `QR_MAX_WIDTH` and `QR_MAX_HEIGHT` environment variables independently set the C ABI's compile-time image limits, each in 1–32768 and defaulting to 640.
-For example: `QR_MAX_WIDTH=640 QR_MAX_HEIGHT=240 cargo build -p qr-ffi --release`.
+For example: `QR_MAX_WIDTH=640 QR_MAX_HEIGHT=240 cargo build -p tessipher-ffi --release`.
 The header does not hard-code dimensions; `qr_memory` returns the limits of the library actually linked.
 The C ABI version is 1, and the maximum module-matrix side is 177.
 
-ABI structs and their field documentation are shared in `crates/qr-ffi/abi_schema.rs`, which generates both Rust types and C declarations.
+ABI structs and their field documentation are shared in `crates/qr-ffi/abi_schema.rs`, which generates both Rust types and C declarations for the `tessipher-ffi` package.
 `build.rs` emits a raw `tessipher.h` into OUT_DIR without invoking clang-format;
 ordinary Cargo builds do not need the formatter.
 `tools/check_header.py` formats that raw header using the root configuration before
@@ -95,7 +95,7 @@ feature macro values, which expose the matching guarded declarations.
 After intentional changes to the schema or header documentation, update the bundled copy with `uv run tools/check_header.py --write`.
 C declarations and an executable check are demonstrated in `examples/c_smoke.c`.
 
-Micro QR declarations and symbols follow the `qr-ffi` Cargo features. Every
+Micro QR declarations and symbols follow the `tessipher-ffi` Cargo features. Every
 generated header defines `QR_HAS_MICRO_QR` and `QR_HAS_MICRO_QR_DETECT` as 0 or
 1 for its archive. `micro-qr-detect` also sets the matrix macro. These are
 numeric macros: use `#if QR_HAS_MICRO_QR`, not `#ifdef QR_HAS_MICRO_QR`, because

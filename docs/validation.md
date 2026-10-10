@@ -1,5 +1,14 @@
 # Validation record
 
+## Crates.io package names
+
+The historical command transcripts below intentionally retain pre-consolidation
+workspace selectors (`qr`, `qr-core`, `qr-detect`, and `qr-ffi`). The public
+crates.io release is now one package, `tessipher`, whose library name remains
+`qr` and whose modules are `qr::core` and `qr::detect`. The repository-only
+`tessipher-ffi` package keeps library name `qr_ffi` and archive name
+`libqr_ffi.a`; old selectors below describe the checks as they were run.
+
 The following checks were performed in the workspace on 2026-10-07.
 This is a historical record; the sections below describe the implementation changes and measurements made on that date, not the later English documentation update.
 The host was aarch64 macOS, the current compiler was `rustc 1.99.0 (b940084d7 2026-09-28)`, and MSRV validation used an actual Rust 1.85.1 toolchain.
@@ -522,3 +531,26 @@ wrappers and observed zero allocations.
 The Micro image path retains its affine single-finder geometry, so strong
 projective distortion remains a documented recognition limitation. Physical MCU
 cycle/stack measurements and real-camera recognition rates remain outstanding.
+
+## Single public Rust crate release preparation (2026-10-09)
+
+The workspace now publishes one Rust package, `tessipher`, with the stable
+library name `qr` and public modules `qr::core` and `qr::detect`. The
+repository-only `tessipher-ffi` crate remains `publish = false` and preserves
+the `qr_ffi` C ABI. Consolidation preserved the pre-change all-features
+coverage of 77 runtime tests and 5 doctests.
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` and `git diff --check` | Passed |
+| `cargo test --workspace --all-features --locked` and release variant | Passed; 77 tests + 5 doctests |
+| `cargo test -p tessipher --no-default-features --locked` | Passed; matrix-only feature matrix |
+| Rust 1.85.1 `cargo +1.85.1 check -p tessipher` (default/all-features) | Passed |
+| Strict rustdoc and workspace clippy | Passed, including no-default rustdoc |
+| Rust embedded/WASM builds, FFI no-host variants, generated headers, symbols, and local C smoke/Micro QR checks | Passed |
+| `cargo package -p tessipher --allow-dirty --locked` | Passed; `target/package/tessipher-0.1.0.crate`, 16 files, 160.7 KiB |
+| `python3 tools/package_check.py` | Passed; unpacked archive all-features tests passed offline |
+| `cargo publish --dry-run -p tessipher --allow-dirty --locked` | Passed with registry access; Cargo aborted the upload as expected for a dry run |
+
+Remote CI and physical MCU cycle/stack or camera measurements were not run as
+part of this preparation. No package was uploaded, and no push was performed.

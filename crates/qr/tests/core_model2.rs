@@ -1,4 +1,4 @@
-use qr_core::*;
+use qr::core::*;
 fn decode_bits(bits: &[u8], side: usize) -> Result<(Decoded, Vec<u8>), Error> {
     let mut scratch = vec![0; SCRATCH_BYTES];
     let mut out = vec![0; MAX_PAYLOAD_BYTES];

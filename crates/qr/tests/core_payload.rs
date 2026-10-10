@@ -1,4 +1,4 @@
-use qr_core::*;
+use qr::core::*;
 #[derive(Default)]
 struct Bits(Vec<bool>);
 impl Bits {

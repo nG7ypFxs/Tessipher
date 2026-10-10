@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/qr-core", "crates/qr-detect", "crates/qr", "crates/qr-ffi"]
+members = ["crates/qr", "crates/qr-ffi"]
 resolver = "2"
 
 [workspace.package]
@@ -7,6 +7,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
+homepage = "https://github.com/nG7ypFxs/Tessipher"
+repository = "https://github.com/nG7ypFxs/Tessipher"
 
 [profile.release]
 panic = "abort"

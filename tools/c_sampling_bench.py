@@ -4,7 +4,7 @@ import os, pathlib, platform, subprocess
 root=pathlib.Path(__file__).resolve().parents[1]
 target=pathlib.Path(os.environ.get('CARGO_TARGET_DIR',root/'target'))
 if not target.is_absolute(): target=root/target
-subprocess.run(['cargo','build','-p','qr-ffi','--release','--locked'],cwd=root,check=True)
+subprocess.run(['cargo','build','-p','tessipher-ffi','--release','--locked'],cwd=root,check=True)
 libs=['-lpthread','-lm']
 if platform.system()=='Darwin': libs+=['-framework','Security','-framework','CoreFoundation','-liconv']
 else: libs+=['-ldl']

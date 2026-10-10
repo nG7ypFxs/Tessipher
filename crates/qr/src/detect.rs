@@ -5,23 +5,21 @@
 //! [`Config`] sets independent image maxima and finder/candidate/sampling and pixel-read budgets.
 //! [`decode`] returns the first decoded symbol. [`decode_with_stats`] also exposes
 //! counters after failure. No call enumerates every symbol in an image.
-//! Feature `micro-qr-detect` adds separate single-finder [`decode_micro`] APIs.
+//! Feature `micro-qr-detect` adds separate single-finder `decode_micro` APIs.
 //!
 //! ```
-//! use qr_detect::{Config, GrayImage};
+//! use qr::detect::{Config, GrayImage};
 //! let pixels = [255; 8];
 //! let roi = GrayImage::new(&pixels, 2, 2, 6)?;
 //! assert_eq!(roi.pixel(1, 1), Some(255));
 //! let config = Config::<640, 240>::default();
 //! assert_eq!(config.scratch_bytes()?, 4557);
-//! # Ok::<(), qr_detect::Error>(())
+//! # Ok::<(), qr::detect::Error>(())
 //! ```
-#![no_std]
-#![forbid(unsafe_code)]
-use core::cell::Cell;
-use qr_core::{Decoded, Matrix, Segment, MAX_MATRIX_BYTES};
+use crate::core::{Decoded, Matrix, Segment, MAX_MATRIX_BYTES};
 #[cfg(feature = "micro-qr-detect")]
-use qr_core::{MicroDecoded, MicroMatrix};
+use crate::core::{MicroDecoded, MicroMatrix};
+use core::cell::Cell;
 
 /// Required detector scratch alignment, in bytes (1).
 pub const SCRATCH_ALIGN: usize = 1;
@@ -48,7 +46,7 @@ pub enum Error {
     /// No symbol decoded and no more specific failure was retained.
     NotFound,
     /// Core validation, capacity, or decoding failure.
-    Decode(qr_core::Error),
+    Decode(crate::core::Error),
 }
 /// Borrowed ROI. `data` begins at the first pixel of the ROI, not the parent frame.
 #[derive(Clone, Copy)]
@@ -195,7 +193,7 @@ impl<const W: usize, const H: usize> Config<W, H> {
     pub const MAX_WIDTH: usize = W;
     /// Compile-time maximum ROI height, in pixels.
     pub const MAX_HEIGHT: usize = H;
-    /// Returns `qr_core::MAX_MATRIX_BYTES + 20 * max_finders` after validation.
+    /// Returns `qr::core::MAX_MATRIX_BYTES + 20 * max_finders` after validation.
     ///
     /// Returns [`Error::InvalidConfig`] for any invalid setting or image maximum.
     /// The returned allocation is byte-aligned and may be reused between calls.
@@ -619,7 +617,7 @@ fn scan(
 /// global normal, global inverted, local normal, local inverted.
 ///
 /// Supply detector scratch from [`Config::scratch_bytes`] and core scratch of at
-/// least [`qr_core::SCRATCH_BYTES`] bytes. All writable storage belongs to the caller
+/// least [`crate::core::SCRATCH_BYTES`] bytes. All writable storage belongs to the caller
 /// and can be reused. On success, read only the payload and segment prefixes named
 /// by [`Detection::decoded`]; on failure, writable buffer contents are unspecified.
 /// Use [`decode_with_stats`] when failure counters are needed.
@@ -868,7 +866,7 @@ struct MicroSearch<'a> {
     max_candidates: usize,
     max_retries: usize,
     strategy: SamplingStrategy,
-    last_error: &'a mut Option<qr_core::Error>,
+    last_error: &'a mut Option<crate::core::Error>,
 }
 
 #[cfg(feature = "micro-qr-detect")]
@@ -986,7 +984,7 @@ impl MicroSearch<'_> {
         side: usize,
     ) -> Result<Option<MicroDetection>, Error> {
         let matrix = MicroMatrix::new(self.matrix, side).map_err(Error::Decode)?;
-        match qr_core::decode_micro(matrix, self.core_scratch, self.output, self.segments) {
+        match crate::core::decode_micro(matrix, self.core_scratch, self.output, self.segments) {
             Ok(decoded) => Ok(Some(MicroDetection {
                 decoded,
                 corners: projection_corners(h, side),
@@ -995,9 +993,9 @@ impl MicroSearch<'_> {
                 stats: *self.stats,
             })),
             Err(
-                error @ (qr_core::Error::OutputTooSmall
-                | qr_core::Error::SegmentsTooSmall
-                | qr_core::Error::ScratchTooSmall),
+                error @ (crate::core::Error::OutputTooSmall
+                | crate::core::Error::SegmentsTooSmall
+                | crate::core::Error::ScratchTooSmall),
             ) => Err(Error::Decode(error)),
             Err(error) => {
                 *self.last_error = Some(error);
@@ -1020,8 +1018,8 @@ fn validate_input<const W: usize, const H: usize>(
     if scratch.len() < needed {
         return Err(Error::ScratchTooSmall);
     }
-    if core_scratch.len() < qr_core::SCRATCH_BYTES {
-        return Err(Error::Decode(qr_core::Error::ScratchTooSmall));
+    if core_scratch.len() < crate::core::SCRATCH_BYTES {
+        return Err(Error::Decode(crate::core::Error::ScratchTooSmall));
     }
     Ok(())
 }
@@ -1240,7 +1238,7 @@ struct SearchContext<'a> {
     stats: &'a mut Stats,
     max_candidates: usize,
     max_retries: usize,
-    last_error: Option<qr_core::Error>,
+    last_error: Option<crate::core::Error>,
     strategy: SamplingStrategy,
     candidate_hint: Option<&'a mut Option<([Point; 4], usize)>>,
 }
@@ -1440,7 +1438,7 @@ impl SearchContext<'_> {
     ) -> Result<Option<Detection>, Error> {
         let corners = projection_corners(h, side);
         let m = Matrix::new(self.matrix, side).map_err(Error::Decode)?;
-        match qr_core::decode(m, self.core_scratch, self.output, self.segments) {
+        match crate::core::decode(m, self.core_scratch, self.output, self.segments) {
             Ok(decoded) => Ok(Some(Detection {
                 decoded,
                 corners,
@@ -1449,9 +1447,9 @@ impl SearchContext<'_> {
                 stats: *self.stats,
             })),
             Err(
-                e @ (qr_core::Error::OutputTooSmall
-                | qr_core::Error::SegmentsTooSmall
-                | qr_core::Error::ScratchTooSmall),
+                e @ (crate::core::Error::OutputTooSmall
+                | crate::core::Error::SegmentsTooSmall
+                | crate::core::Error::ScratchTooSmall),
             ) => Err(Error::Decode(e)),
             Err(e) => {
                 if candidate_content_error(e) {
@@ -1477,13 +1475,13 @@ fn projection_corners(h: Homography, side: usize) -> [Point; 4] {
         h.at(Point { x: 0.0, y: n }),
     ]
 }
-fn candidate_content_error(e: qr_core::Error) -> bool {
+fn candidate_content_error(e: crate::core::Error) -> bool {
     matches!(
         e,
-        qr_core::Error::ReedSolomon
-            | qr_core::Error::Truncated
-            | qr_core::Error::MalformedPayload
-            | qr_core::Error::UnsupportedMode
+        crate::core::Error::ReedSolomon
+            | crate::core::Error::Truncated
+            | crate::core::Error::MalformedPayload
+            | crate::core::Error::UnsupportedMode
     )
 }
 fn recognition_failure(e: Error) -> bool {
@@ -1491,12 +1489,12 @@ fn recognition_failure(e: Error) -> bool {
         e,
         Error::NotFound
             | Error::Decode(
-                qr_core::Error::Format
-                    | qr_core::Error::Version
-                    | qr_core::Error::ReedSolomon
-                    | qr_core::Error::Truncated
-                    | qr_core::Error::MalformedPayload
-                    | qr_core::Error::UnsupportedMode
+                crate::core::Error::Format
+                    | crate::core::Error::Version
+                    | crate::core::Error::ReedSolomon
+                    | crate::core::Error::Truncated
+                    | crate::core::Error::MalformedPayload
+                    | crate::core::Error::UnsupportedMode
             )
     )
 }
@@ -1804,7 +1802,7 @@ fn observation_pattern(bin: Binary<'_>, f: Finder) -> Result<bool, Error> {
     Ok(false)
 }
 
-#[cfg(test)]
+#[cfg(all(test, tessipher_repository_fixtures))]
 mod tests {
     use super::*;
 
@@ -1821,7 +1819,7 @@ mod tests {
             radius: 24,
         };
         let mut matrix = [0; MAX_MATRIX_BYTES];
-        let mut core_scratch = [0; qr_core::SCRATCH_BYTES];
+        let mut core_scratch = [0; crate::core::SCRATCH_BYTES];
         let mut stats = Stats {
             retries: 1,
             ..Stats::default()
@@ -1834,7 +1832,7 @@ mod tests {
             stats: &mut stats,
             max_candidates: 1,
             max_retries: 2,
-            last_error: Some(qr_core::Error::Version),
+            last_error: Some(crate::core::Error::Version),
             strategy: SamplingStrategy::CenterThenMajority5,
             candidate_hint: None,
         };
@@ -1842,7 +1840,7 @@ mod tests {
         let outside = Homography([1.0, 0.0, -10.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
         assert_eq!(search.attempt(bin, outside, 21), Ok(None));
         assert_eq!(search.stats.retries, 2);
-        assert_eq!(search.last_error, Some(qr_core::Error::Version));
+        assert_eq!(search.last_error, Some(crate::core::Error::Version));
         assert_eq!(search.attempt(bin, outside, 21), Err(Error::RetryBudget));
         assert_eq!(search.stats.retries, 2);
     }
@@ -1943,7 +1941,7 @@ mod tests {
             let budget = PixelBudget::new(1);
             let bin = test_binary(image, &budget, local);
             let mut matrix = [0; MAX_MATRIX_BYTES];
-            let mut cs = [0; qr_core::SCRATCH_BYTES];
+            let mut cs = [0; crate::core::SCRATCH_BYTES];
             let mut stats = Stats::default();
             let mut search = SearchContext {
                 matrix: &mut matrix,
@@ -1953,12 +1951,12 @@ mod tests {
                 stats: &mut stats,
                 max_candidates: 1,
                 max_retries: 2,
-                last_error: Some(qr_core::Error::Version),
+                last_error: Some(crate::core::Error::Version),
                 strategy: SamplingStrategy::Center,
                 candidate_hint: None,
             };
             assert_eq!(search.attempt(bin, h, 21), Err(Error::PixelBudget));
-            assert_eq!(search.last_error, Some(qr_core::Error::Version));
+            assert_eq!(search.last_error, Some(crate::core::Error::Version));
             assert_eq!(search.stats.retries, 1);
             assert_eq!(budget.used.get(), 1);
         }
@@ -1986,7 +1984,7 @@ mod tests {
         let budget = PixelBudget::new(3 * 49 + 1);
         let bin = test_binary(image, &budget, false);
         let mut matrix = [0; MAX_MATRIX_BYTES];
-        let mut cs = [0; qr_core::SCRATCH_BYTES];
+        let mut cs = [0; crate::core::SCRATCH_BYTES];
         let mut stats = Stats::default();
         let mut search = SearchContext {
             matrix: &mut matrix,
@@ -1996,7 +1994,7 @@ mod tests {
             stats: &mut stats,
             max_candidates: 1,
             max_retries: 2,
-            last_error: Some(qr_core::Error::Version),
+            last_error: Some(crate::core::Error::Version),
             strategy: SamplingStrategy::Center,
             candidate_hint: None,
         };
@@ -2004,7 +2002,7 @@ mod tests {
         assert_eq!(budget.used.get(), 148);
         assert_eq!(search.stats.candidates, 1);
         assert_eq!(search.stats.retries, 0);
-        assert_eq!(search.last_error, Some(qr_core::Error::Version));
+        assert_eq!(search.last_error, Some(crate::core::Error::Version));
     }
     #[test]
     fn five_votes_charge_duplicates_all_reads_and_partial_local_decisions() {
@@ -2017,7 +2015,7 @@ mod tests {
                 let budget = PixelBudget::new(limit);
                 let bin = test_binary(image, &budget, local);
                 let mut matrix = [0; MAX_MATRIX_BYTES];
-                let mut cs = [0; qr_core::SCRATCH_BYTES];
+                let mut cs = [0; crate::core::SCRATCH_BYTES];
                 let mut stats = Stats::default();
                 let mut search = SearchContext {
                     matrix: &mut matrix,
@@ -2055,7 +2053,7 @@ mod tests {
         ] {
             let budget = PixelBudget::new(10000);
             let mut matrix = [0; MAX_MATRIX_BYTES];
-            let mut cs = [0; qr_core::SCRATCH_BYTES];
+            let mut cs = [0; crate::core::SCRATCH_BYTES];
             let mut stats = Stats::default();
             let mut search = SearchContext {
                 matrix: &mut matrix,
@@ -2087,9 +2085,9 @@ mod tests {
         )
         .is_none());
         for error in [
-            qr_core::Error::Format,
-            qr_core::Error::Version,
-            qr_core::Error::InvalidMatrix,
+            crate::core::Error::Format,
+            crate::core::Error::Version,
+            crate::core::Error::InvalidMatrix,
         ] {
             assert!(!candidate_content_error(error));
         }
@@ -2118,7 +2116,7 @@ mod tests {
         };
         let config = DefaultConfig::default();
         let mut ds = [0; MAX_MATRIX_BYTES + 32 * FINDER_BYTES];
-        let mut cs = [0; qr_core::SCRATCH_BYTES];
+        let mut cs = [0; crate::core::SCRATCH_BYTES];
         let mut output = [0; 16];
         let mut segments = [Segment::EMPTY; 4];
         for state in [
@@ -2173,7 +2171,7 @@ mod tests {
                     &mut segments,
                     &mut stats
                 ),
-                Err(Error::Decode(qr_core::Error::OutputTooSmall))
+                Err(Error::Decode(crate::core::Error::OutputTooSmall))
             );
             assert_eq!(tracker.state(), state);
             assert_eq!(stats.retries, 1);
@@ -2188,7 +2186,7 @@ mod tests {
                     &mut [],
                     &mut stats
                 ),
-                Err(Error::Decode(qr_core::Error::SegmentsTooSmall))
+                Err(Error::Decode(crate::core::Error::SegmentsTooSmall))
             );
             assert_eq!(tracker.state(), state);
             assert_eq!(stats.retries, 1);

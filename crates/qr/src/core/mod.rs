@@ -12,20 +12,18 @@
 //! transformations. FNC1 percent escapes continue across Alphanumeric segment
 //! boundaries and ECI headers; other data modes end the escape sequence.
 //! Structured Append metadata is returned without joining symbols.
-//! Enable Cargo feature `micro-qr` for [`MicroMatrix`] and [`decode_micro`].
+//! Enable Cargo feature `micro-qr` for `MicroMatrix` and `decode_micro`.
 //!
 //! ```
-//! use qr_core::{Matrix, MAX_MATRIX_BYTES};
+//! use qr::core::{Matrix, MAX_MATRIX_BYTES};
 //! let mut bits = [0; MAX_MATRIX_BYTES];
 //! bits[0] = 0x80; // The module at (0, 0) is dark.
 //! let matrix = Matrix::new(&bits, 21)?;
 //! assert_eq!(matrix.version(), 1);
 //! assert_eq!(matrix.get(0, 0), Some(true));
 //! assert_eq!(matrix.get(1, 0), Some(false));
-//! # Ok::<(), qr_core::Error>(())
+//! # Ok::<(), qr::core::Error>(())
 //! ```
-#![no_std]
-#![forbid(unsafe_code)]
 #[cfg(feature = "micro-qr")]
 mod micro;
 mod payload;
@@ -295,7 +293,7 @@ fn capacity_error(error: Error) -> bool {
 /// Damage beyond the correction limit is not guaranteed to be detected.
 ///
 /// ```
-/// use qr_core::{decode, Matrix, Segment, SCRATCH_BYTES};
+/// use qr::core::{decode, Matrix, Segment, SCRATCH_BYTES};
 /// // Packed V1-H, mask 3, encoding the raw bytes "TEST".
 /// let bits = [
 ///     0xfe, 0x23, 0xfc, 0x11, 0x50, 0x6e, 0x8e, 0xbb,
@@ -313,7 +311,7 @@ fn capacity_error(error: Error) -> bool {
 ///     &mut payload, &mut segments)?;
 /// assert_eq!(&payload[..decoded.payload_len], b"TEST");
 /// assert_eq!(decoded.segment_count, 1);
-/// # Ok::<(), qr_core::Error>(())
+/// # Ok::<(), qr::core::Error>(())
 /// ```
 pub fn decode(
     matrix: Matrix<'_>,
@@ -468,13 +466,13 @@ pub fn parse_payload(
 /// are unspecified on error; on success, read only the returned lengths.
 ///
 /// ```
-/// use qr_core::{parse_payload_info, Segment};
+/// use qr::core::{parse_payload_info, Segment};
 /// let mut output = [0; 1];
 /// let mut segments = [Segment::EMPTY; 1];
 /// let info = parse_payload_info(&[0x40, 0x14, 0x10], 1, &mut output, &mut segments)?;
 /// assert_eq!(&output[..info.payload_len], b"A");
 /// assert_eq!(info.segment_count, 1);
-/// # Ok::<(), qr_core::Error>(())
+/// # Ok::<(), qr::core::Error>(())
 /// ```
 pub fn parse_payload_info(
     data: &[u8],
@@ -668,13 +666,13 @@ fn read_version(m: OrientedMatrix<'_>) -> Result<u8, Error> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, tessipher_repository_fixtures))]
 mod tests {
     use super::*;
 
     #[test]
     fn mirrored_valid_format_still_retries_after_content_failure() {
-        let corpus = include_bytes!("../../../fixtures/all-model2.bin");
+        let corpus = include_bytes!("../../../../fixtures/all-model2.bin");
         let mut cursor = 4;
         let mut beyond_format = 0;
         let mut scratch = [0; SCRATCH_BYTES];
@@ -720,7 +718,7 @@ mod tests {
 
     #[test]
     fn both_content_failures_preserve_normal_error() {
-        let corpus = include_bytes!("../../../fixtures/all-model2.bin");
+        let corpus = include_bytes!("../../../../fixtures/all-model2.bin");
         let mut cursor = 4;
         let mut bits = [0; 56];
         loop {
@@ -783,7 +781,7 @@ mod tests {
 
     #[test]
     fn bch_uncorrectable_matrix_copy_recovers_from_other_copy() {
-        let original = include_bytes!("../../../fixtures/v7.bin");
+        let original = include_bytes!("../../../../fixtures/v7.bin");
         let bad_format = (0..32768)
             .find(|&value| nearest(value, value, 0, 31, format_word).is_none())
             .unwrap();

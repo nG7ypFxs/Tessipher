@@ -31,8 +31,8 @@ jobs:
       - run: uv run tools/c_smoke.py
       - run: python3 tools/c_micro.py
       - run: python3 tools/cross_decode.py
-      - run: cargo run -p qr --example fuzz_smoke --release
-      - run: cargo run -p qr --example bench --release
+      - run: cargo run -p tessipher --example fuzz_smoke --release
+      - run: cargo run -p tessipher --example bench --release
       - run: python3 tools/generate_fixtures.py && git diff --exit-code -- fixtures/
       - run: python3 -m pip install segno==1.6.6
       - run: python3 tools/generate_segno_fixtures.py && git diff --exit-code -- fixtures/
@@ -44,15 +44,15 @@ jobs:
         with:
           toolchain: stable
           targets: thumbv6m-none-eabi, thumbv7em-none-eabi, wasm32-unknown-unknown
-      - run: cargo build -p qr-core --target thumbv6m-none-eabi --release --locked
-      - run: cargo build -p qr-core --features micro-qr --target thumbv6m-none-eabi --release --locked
-      - run: cargo build -p qr-detect --features micro-qr-detect --target thumbv6m-none-eabi --release --locked
-      - run: cargo build -p qr-ffi --no-default-features --target thumbv7em-none-eabi --release --locked
-      - run: cargo build -p qr-ffi --no-default-features --features micro-qr --target thumbv7em-none-eabi --release --locked
-      - run: cargo build -p qr-ffi --no-default-features --features micro-qr-detect --target thumbv7em-none-eabi --release --locked
+      - run: cargo build -p tessipher --no-default-features --target thumbv6m-none-eabi --release --locked
+      - run: cargo build -p tessipher --no-default-features --features micro-qr --target thumbv6m-none-eabi --release --locked
+      - run: cargo build -p tessipher --features micro-qr-detect --target thumbv6m-none-eabi --release --locked
+      - run: cargo build -p tessipher-ffi --no-default-features --target thumbv7em-none-eabi --release --locked
+      - run: cargo build -p tessipher-ffi --no-default-features --features micro-qr --target thumbv7em-none-eabi --release --locked
+      - run: cargo build -p tessipher-ffi --no-default-features --features micro-qr-detect --target thumbv7em-none-eabi --release --locked
       - run: python3 tools/check_symbols.py
-      - run: cargo check -p qr --target wasm32-unknown-unknown --locked
-      - run: cargo check -p qr --features micro-qr-detect --target wasm32-unknown-unknown --locked
+      - run: cargo check -p tessipher --target wasm32-unknown-unknown --locked
+      - run: cargo check -p tessipher --features micro-qr-detect --target wasm32-unknown-unknown --locked
   zephyr:
     runs-on: ubuntu-latest
     steps:
@@ -102,3 +102,20 @@ jobs:
       - run: cargo fuzz run payload -- -max_total_time=15
       - run: cargo fuzz run matrix -- -max_total_time=15
       - run: cargo fuzz run image -- -max_total_time=15
+
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo doc --workspace --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings -D missing_docs
+      - run: cargo package -p tessipher --locked
+      - run: python3 tools/package_check.py

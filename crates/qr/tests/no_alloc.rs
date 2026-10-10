@@ -339,7 +339,7 @@ fn micro_decoding_does_not_allocate() {
     let matrix_len = u16::from_le_bytes([corpus[10], corpus[11]]) as usize;
     let bits = &corpus[12 + output_len..12 + output_len + matrix_len];
     let matrix = qr::MicroMatrix::new(bits, 11).unwrap();
-    let mut core = [0; qr::core::SCRATCH_BYTES];
+    let mut core = [0; qr::core::MICRO_SCRATCH_BYTES];
     let config = qr::Config::<64, 64>::default();
     let mut detector = vec![0; config.scratch_bytes().unwrap()];
     let mut output = [0; 35];

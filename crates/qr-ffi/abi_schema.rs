@@ -23,7 +23,7 @@ abi_struct! {
     max_width: u32,
     /// Compiled maximum ROI height, in pixels.
     max_height: u32,
-    /// Core scratch size, independent of the matrix version.
+    /// Core scratch size sufficient for every Model 2 matrix and required by Gray8 entry points.
     core_scratch_bytes: usize,
     /// Detector scratch size for the queried configuration.
     detector_scratch_bytes: usize,
@@ -170,9 +170,9 @@ abi_struct! {
     max_width: u32,
     /// Compiled maximum ROI height, in pixels.
     max_height: u32,
-    /// Scratch bytes required by qr_decode_micro_matrix (439).
+    /// Scratch bytes required by qr_decode_micro_matrix (184).
     matrix_core_scratch_bytes: usize,
-    /// Core scratch bytes required by Micro QR Gray8 entry points (7077), or zero when unavailable.
+    /// Core scratch bytes required by Micro QR Gray8 entry points (184), or zero when unavailable.
     image_core_scratch_bytes: usize,
     /// Detector scratch bytes for the queried configuration, or zero when unavailable.
     detector_scratch_bytes: usize,

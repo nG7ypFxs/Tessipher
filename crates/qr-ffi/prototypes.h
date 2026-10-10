@@ -72,9 +72,16 @@ int32_t qr_default_config(qr_config *out);
  * Returns QR_OK, QR_INVALID_ARGUMENT, QR_OVERLAP, or QR_INVALID_CONFIG.
  * config is mandatory/readable; out is mandatory/writable and written only on success. */
 int32_t qr_memory(const qr_config *config, qr_memory_info *out);
+
+/* Queries Model 2 matrix core scratch for version 1..40 (460 bytes at V1).
+ * Returns QR_VERSION for an invalid version, QR_INVALID_ARGUMENT for invalid out.
+ * out is written only on success and must be aligned, live, writable size_t storage.
+ * Scratch alignment is 1. Image detection and tracking instead require qr_memory. */
+int32_t qr_matrix_scratch_bytes(uint32_t version, size_t *out);
 /* side is 17 + 4 * version (version 1..40); bits have no quiet-zone border.
  * Normal orientation is tried first, then the transpose after content errors.
- * Scratch requires qr_memory_info.core_scratch_bytes; segment_capacity <= max_segments.
+ * Scratch requires qr_matrix_scratch_bytes(version), or qr_memory_info.core_scratch_bytes
+ * for any version; segment_capacity <= max_segments.
  * Returns QR_OK, QR_INVALID_ARGUMENT, QR_OVERLAP, or a core error (101..110).
  * Detection-only result fields are zero. */
 int32_t qr_decode_matrix(const uint8_t *bits, size_t bits_len, size_t side, uint8_t *scratch,

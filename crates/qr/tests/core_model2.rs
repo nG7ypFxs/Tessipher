@@ -1,6 +1,6 @@
 use qr::core::*;
 fn decode_bits(bits: &[u8], side: usize) -> Result<(Decoded, Vec<u8>), Error> {
-    let mut scratch = vec![0; SCRATCH_BYTES];
+    let mut scratch = vec![0xa5; scratch_bytes(((side - 17) / 4) as u8)?];
     let mut out = vec![0; MAX_PAYLOAD_BYTES];
     let mut segments = vec![Segment::EMPTY; MAX_SEGMENTS];
     let d = decode(
@@ -26,6 +26,16 @@ fn independently_generated_all_1280_normal_and_transposed() {
         p += 5;
         let side = v as usize * 4 + 17;
         let mirrored = transpose(&corpus[p..p + len], side);
+        let mut short = vec![0; scratch_bytes(v).unwrap() - 1];
+        assert_eq!(
+            decode(
+                Matrix::new(&corpus[p..p + len], side).unwrap(),
+                &mut short,
+                &mut [0; 8],
+                &mut [Segment::EMPTY; 1]
+            ),
+            Err(Error::ScratchTooSmall)
+        );
         for bits in [&corpus[p..p + len], &mirrored] {
             let (d, out) = decode_bits(bits, side)
                 .unwrap_or_else(|err| panic!("v={v} ec={e} mask={mask}: {err:?}"));
@@ -500,6 +510,31 @@ fn independent_fnc_percent_pair_across_segments_normal_and_transposed() {
             assert!(segments[..decoded.segment_count]
                 .iter()
                 .all(|segment| segment.eci == 3));
+        }
+    }
+}
+
+#[test]
+fn scratch_query_limits_and_reuse() {
+    assert_eq!(scratch_bytes(0), Err(Error::Version));
+    assert_eq!(scratch_bytes(41), Err(Error::Version));
+    assert_eq!(scratch_bytes(255), Err(Error::Version));
+    assert_eq!(scratch_bytes(1), Ok(460));
+    assert_eq!(scratch_bytes(40), Ok(SCRATCH_BYTES));
+    let mut scratch = [0xa5; SCRATCH_BYTES];
+    let mut output = [0; 32];
+    let mut segments = [Segment::EMPTY; 8];
+    for _ in 0..2 {
+        for (side, bits) in [
+            (177, include_bytes!("../../../fixtures/v40.bin").as_slice()),
+            (
+                21,
+                include_bytes!("../../../fixtures/eci-fnc2.bin").as_slice(),
+            ),
+        ] {
+            let matrix = Matrix::new(bits, side).unwrap();
+            let size = scratch_bytes(matrix.version()).unwrap();
+            decode(matrix, &mut scratch[..size], &mut output, &mut segments).unwrap();
         }
     }
 }

@@ -103,7 +103,12 @@ fn dimensions_and_caller_capacities_are_checked() {
     let mut output = [0; 3];
     let mut segments = [Segment::EMPTY; 1];
     assert_eq!(
-        decode_micro(matrix, &mut [], &mut output, &mut segments),
+        decode_micro(
+            matrix,
+            &mut scratch[..MICRO_SCRATCH_BYTES - 1],
+            &mut output,
+            &mut segments
+        ),
         Err(Error::ScratchTooSmall)
     );
     assert_eq!(
@@ -241,5 +246,30 @@ fn fixed_finder_separator_and_timing_modules_are_validated() {
         let mut damaged = original.to_vec();
         flip(&mut damaged, 17, coordinate);
         assert_eq!(decode_bits(&damaged, 17), Err(Error::InvalidMatrix));
+    }
+}
+
+#[test]
+fn minimal_scratch_can_be_reused_across_versions_and_orientations() {
+    assert_eq!(MICRO_SCRATCH_BYTES, 184);
+    let mut scratch = [0xa5; MICRO_SCRATCH_BYTES];
+    let mut output = [0; MICRO_MAX_PAYLOAD_BYTES];
+    let mut segments = [Segment::EMPTY; 8];
+    for version in [4, 1, 3, 2, 1, 4] {
+        let bits = fixture(version, if version == 1 { 255 } else { 0 });
+        let side = version as usize * 2 + 9;
+        for orientation in 0..8 {
+            let transformed = transform(bits, side, orientation);
+            let expected = decode_bits(&transformed, side).unwrap();
+            let found = decode_micro(
+                MicroMatrix::new(&transformed, side).unwrap(),
+                &mut scratch,
+                &mut output,
+                &mut segments,
+            )
+            .unwrap();
+            assert_eq!(found, expected.0);
+            assert_eq!(&output[..found.payload_len], expected.1);
+        }
     }
 }

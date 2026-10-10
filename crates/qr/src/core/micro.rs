@@ -9,7 +9,7 @@ pub const MICRO_MAX_MATRIX_BYTES: usize = (MICRO_MAX_SIDE * MICRO_MAX_SIDE).div_
 /// Largest decoded Micro QR payload in bytes.
 pub const MICRO_MAX_PAYLOAD_BYTES: usize = 35;
 /// Scratch bytes required by [`decode_micro`].
-pub const MICRO_SCRATCH_BYTES: usize = 24 + 255 + rs::WORK_BYTES;
+pub const MICRO_SCRATCH_BYTES: usize = 24 + rs::WORK_BYTES;
 
 /// Micro QR symbol version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,7 +163,7 @@ pub fn decode_micro(
                 decoded.mirrored = transform >= 4;
                 return Ok(decoded);
             }
-            Err(e) if capacity_error(e) => return Err(e),
+            Err(e) if super::capacity_error(e) => return Err(e),
             Err(e) => {
                 if first.is_none() {
                     first = Some(e);
@@ -172,13 +172,6 @@ pub fn decode_micro(
         }
     }
     Err(first.unwrap_or(Error::InvalidMatrix))
-}
-
-fn capacity_error(error: Error) -> bool {
-    matches!(
-        error,
-        Error::ScratchTooSmall | Error::OutputTooSmall | Error::SegmentsTooSmall
-    )
 }
 
 fn decode_oriented(
@@ -208,8 +201,7 @@ fn decode_oriented(
     };
     let mask = format & 3;
     let (total, data_bytes, data_bits) = characteristics(symbol);
-    let (raw, rest) = scratch.split_at_mut(24);
-    let (block, work) = rest.split_at_mut(255);
+    let (raw, work) = scratch.split_at_mut(24);
     raw.fill(0);
 
     let side = matrix.matrix.side;
@@ -248,7 +240,6 @@ fn decode_oriented(
     if source_bit != total_bits {
         return Err(Error::InvalidMatrix);
     }
-    block[..total].copy_from_slice(&raw[..total]);
     // The Micro QR error-correction characteristics reserve p parity symbols
     // against miscorrection. Syndromes still use every ECC codeword.
     let reserve = match symbol {
@@ -257,9 +248,9 @@ fn decode_oriented(
         2 | 3 | 5 => 2, // M2-M, M3-L, M4-L
         _ => 0,
     };
-    let corrected = rs::correct(&mut block[..total], total - data_bytes, reserve, work)? as u8;
+    let corrected = rs::correct(&mut raw[..total], total - data_bytes, reserve, work)? as u8;
     let (payload_len, segment_count) =
-        parse_micro(&block[..data_bytes], data_bits, version, output, segments)?;
+        parse_micro(&raw[..data_bytes], data_bits, version, output, segments)?;
     Ok(MicroDecoded {
         version,
         ec_level,

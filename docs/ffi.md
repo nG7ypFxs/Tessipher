@@ -156,7 +156,7 @@ keep all regions disjoint. Do not use a packed struct as storage for ABI objects
 
 | Storage | Capacity from `qr_memory` | Notes |
 | --- | --- | --- |
-| Core scratch | `core_scratch_bytes` (7077) | Required for both input types. |
+| Core scratch | `core_scratch_bytes` (7077) | Required for Gray8; matrix input can use `qr_matrix_scratch_bytes(version, &size)`. |
 | Detector scratch | `detector_scratch_bytes` (4557 at default config) | Gray8 only; changes with finder capacity. |
 | Payload bytes | `max_payload_bytes` (7089) | Conservative maximum; no extra terminator byte required by the API. |
 | Segment array | `max_segments` (5912 entries) | Multiply by `segment_size`, with overflow checking for a generic allocator. |
@@ -173,10 +173,10 @@ resize storage as needed before decoding. Matrix input does not need detector
 storage, but querying memory still provides core/output/layout requirements.
 
 With `QR_HAS_MICRO_QR`, call `qr_micro_memory` for the separate Micro QR
-contract. Matrix scratch is 439 bytes, maximum payload is 35 bytes, and the
+contract. Matrix scratch is 184 bytes, maximum payload is 35 bytes, and the
 conservative segment capacity is 16. When the archive lacks
 `micro-qr-detect`, `image_core_scratch_bytes` and `detector_scratch_bytes` are
-zero. A detection-enabled default configuration reports 7077 image-core bytes
+zero. A detection-enabled default configuration reports 184 image-core bytes
 and 4557 detector bytes. The query also reports the target size and alignment
 of `qr_micro_result`, `qr_segment`, and `qr_stats`. These values are separate
 from the unchanged ABI-1 `qr_memory_info` layout.

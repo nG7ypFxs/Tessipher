@@ -32,6 +32,21 @@ int main(void) {
     fclose(f);
     assert(qr_decode_matrix(matrix, sizeof matrix, 21, core_scratch, sizeof core_scratch, payload,
                             sizeof payload, segments, 16, &result) == 0);
+
+#ifndef QR_TEST_LEGACY_HEADER
+    size_t minimal_scratch = 0;
+    assert(qr_matrix_scratch_bytes(1, &minimal_scratch) == QR_OK && minimal_scratch == 460);
+    assert(qr_matrix_scratch_bytes(40, &minimal_scratch) == QR_OK && minimal_scratch == 7077);
+    assert(qr_matrix_scratch_bytes(0, &minimal_scratch) == QR_VERSION && minimal_scratch == 7077);
+    assert(qr_matrix_scratch_bytes(256, &minimal_scratch) == QR_VERSION);
+    assert(qr_matrix_scratch_bytes(1, NULL) == QR_INVALID_ARGUMENT);
+    assert(qr_matrix_scratch_bytes(1, &minimal_scratch) == QR_OK);
+    assert(qr_decode_matrix(matrix, sizeof matrix, 21, core_scratch, minimal_scratch - 1, payload,
+                            sizeof payload, segments, 16, &result) == QR_CORE_SCRATCH_TOO_SMALL);
+    assert(qr_decode_matrix(matrix, sizeof matrix, 21, core_scratch, minimal_scratch, payload,
+                            sizeof payload, segments, 16, &result) == QR_OK);
+
+#endif
     assert(result.version == 1 && result.ec_level == 3 && result.mask == 3 &&
            result.payload_len == 4);
     assert(memcmp(payload, "TEST", 4) == 0 && segments[0].mode == 4 && segments[0].eci == 3);

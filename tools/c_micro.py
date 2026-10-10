@@ -148,6 +148,7 @@ def main():
                     "-Wall",
                     "-Wextra",
                     "-Werror",
+                    "-DQR_TEST_LEGACY_HEADER",
                     f"-I{include}",
                     str(ROOT / "examples/c_smoke.c"),
                     str(archive),

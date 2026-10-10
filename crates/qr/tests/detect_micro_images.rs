@@ -1,6 +1,6 @@
 #![cfg(all(feature = "detect", feature = "micro-qr-detect"))]
 
-use qr::core::{Segment, SCRATCH_BYTES};
+use qr::core::{Segment, MICRO_SCRATCH_BYTES};
 use qr::detect::{decode_micro, decode_micro_with_stats, Config, Error, GrayImage, Stats};
 
 fn matrix(version: u8) -> (&'static [u8], usize, &'static [u8]) {
@@ -50,7 +50,7 @@ fn run(pixels: &[u8], width: usize, height: usize) -> (u8, Vec<u8>) {
     let config = Config::<256, 256>::default();
     let image = GrayImage::new(pixels, width, height, width).unwrap();
     let mut detector = vec![0; config.scratch_bytes().unwrap()];
-    let mut core = vec![0; SCRATCH_BYTES];
+    let mut core = vec![0; MICRO_SCRATCH_BYTES];
     let mut output = [0; 64];
     let mut segments = [Segment::EMPTY; 8];
     let found = decode_micro(
@@ -107,7 +107,7 @@ fn run_stats(
 ) -> (Result<qr::detect::MicroDetection, Error>, Stats) {
     let image = GrayImage::new(pixels, width, height, width).unwrap();
     let mut detector = vec![0; config.scratch_bytes().unwrap()];
-    let mut core = vec![0; SCRATCH_BYTES];
+    let mut core = vec![0; MICRO_SCRATCH_BYTES];
     let mut stats = Stats::default();
     let result = decode_micro_with_stats(
         image,
@@ -155,7 +155,7 @@ fn detector_respects_stride() {
     let config = Config::<256, 256>::default();
     let image = GrayImage::new(&padded, width, height, stride).unwrap();
     let mut detector = vec![0; config.scratch_bytes().unwrap()];
-    let mut core = vec![0; SCRATCH_BYTES];
+    let mut core = vec![0; MICRO_SCRATCH_BYTES];
     let mut output = [0; 64];
     let mut segments = [Segment::EMPTY; 8];
     let found = decode_micro(
@@ -262,4 +262,23 @@ fn false_positives_and_budgets_are_deterministic() {
         result,
         Err(Error::Decode(qr::core::Error::SegmentsTooSmall))
     );
+}
+
+#[test]
+fn minimal_core_scratch_is_required() {
+    let (pixels, width, height, _) = render(4, 4, 4);
+    let image = GrayImage::new(&pixels, width, height, width).unwrap();
+    let config = Config::<256, 256>::default();
+    let mut detector = vec![0; config.scratch_bytes().unwrap()];
+    assert!(matches!(
+        decode_micro(
+            image,
+            &config,
+            &mut detector,
+            &mut [0; MICRO_SCRATCH_BYTES - 1],
+            &mut [0; 64],
+            &mut [Segment::EMPTY; 8]
+        ),
+        Err(qr::detect::Error::Decode(qr::core::Error::ScratchTooSmall))
+    ));
 }

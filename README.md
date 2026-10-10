@@ -77,6 +77,8 @@ fn decode_roi(
 ```
 
 Query scratch requirements with `qr::memory_requirements(&config)`.
+For Model 2 matrix input, `qr::core::scratch_bytes(version)` (C: `qr_matrix_scratch_bytes`) returns the required scratch size: 460 bytes for V1 and 7077 for V40. Micro QR matrix and image input need 184 core bytes when their features are enabled. Model 2 image detection and tracking require the full version-independent allocation.
+
 With the default configuration, core scratch is **7077 bytes**, detector scratch is **4557 bytes**, the total is **11634 bytes**, and alignment is 1.
 Allocate these regions in a task arena or dedicated firmware RAM and reuse them across calls.
 The API does not construct a large owned Scratch value that must be copied onto the stack.

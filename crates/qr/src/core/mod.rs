@@ -49,7 +49,8 @@ pub const MAX_DATA_CODEWORDS: usize = 2956;
 pub const MAX_PAYLOAD_BYTES: usize = 7089;
 /// Conservative upper bound, including control segments and empty segments.
 pub const MAX_SEGMENTS: usize = MAX_DATA_CODEWORDS * 2;
-/// Required scratch length for [`decode`], independent of matrix version.
+/// Scratch length sufficient for [`decode`] at every supported matrix version.
+/// Use [`scratch_bytes`] when the version is known.
 pub const SCRATCH_BYTES: usize = MAX_CODEWORDS + MAX_DATA_CODEWORDS + 255 + rs::WORK_BYTES;
 /// Required scratch alignment, in bytes (1).
 pub const SCRATCH_ALIGN: usize = 1;
@@ -62,7 +63,7 @@ pub const SCRATCH_ALIGN: usize = 1;
 pub enum Error {
     /// Invalid side length or insufficient packed matrix storage.
     InvalidMatrix = 1,
-    /// Scratch is shorter than [`SCRATCH_BYTES`].
+    /// Scratch is shorter than the required size for this decoder and version.
     ScratchTooSmall = 2,
     /// Format BCH information is uncorrectable or ambiguous.
     Format = 3,
@@ -283,7 +284,8 @@ fn capacity_error(error: Error) -> bool {
 /// The input orientation must place finders at the top-left, top-right, and
 /// bottom-left; this function does not search arbitrary rotations.
 ///
-/// Supply at least [`SCRATCH_BYTES`] scratch bytes. Payload and segment buffers
+/// Supply the number of scratch bytes returned by [`scratch_bytes`] for the
+/// matrix version, or [`SCRATCH_BYTES`] bytes. Payload and segment buffers
 /// may be smaller than [`MAX_PAYLOAD_BYTES`] and [`MAX_SEGMENTS`], respectively;
 /// insufficient capacity returns an error. On success, read only the prefixes
 /// specified by [`Decoded`]; on error, all writable buffer contents are unspecified.
@@ -319,7 +321,7 @@ pub fn decode(
     output: &mut [u8],
     segments: &mut [Segment],
 ) -> Result<Decoded, Error> {
-    if scratch.len() < SCRATCH_BYTES {
+    if scratch.len() < scratch_bytes(matrix.version())? {
         return Err(Error::ScratchTooSmall);
     }
     let geometry = VersionGeometry::new(matrix.version());
@@ -361,11 +363,11 @@ fn decode_oriented(
         _ => EcLevel::H,
     };
     let mask = format & 7;
-    let (raw, rest) = scratch.split_at_mut(MAX_CODEWORDS);
-    let (data, rest) = rest.split_at_mut(MAX_DATA_CODEWORDS);
+    let total = raw_codewords(version);
+    let (raw, rest) = scratch.split_at_mut(total);
+    let (data, rest) = rest.split_at_mut(max_data_codewords(version));
     let (block, work) = rest.split_at_mut(255);
     raw.fill(0);
-    let total = raw_codewords(version);
     let mut bit = 0usize;
     let mut right = matrix.matrix.side - 1;
     let mut upwards = true;
@@ -487,8 +489,8 @@ pub fn parse_payload_info(
 }
 
 /// Returns combined data and ECC codewords for `version`, or 0 outside 1..=40.
-pub fn raw_codewords(version: u8) -> usize {
-    if !(1..=40).contains(&version) {
+pub const fn raw_codewords(version: u8) -> usize {
+    if version < 1 || version > MAX_VERSION {
         return 0;
     }
     let v = version as usize;
@@ -502,6 +504,35 @@ pub fn raw_codewords(version: u8) -> usize {
     }
     n / 8
 }
+/// Returns the byte-aligned scratch size for Model 2 matrix decoding at `version`.
+///
+/// Valid versions are 1 through 40; invalid versions return [`Error::Version`].
+/// The size covers every error-correction level and both decoding orientations.
+/// Image detection and tracking still require [`SCRATCH_BYTES`], because their
+/// matrix version is unknown before detection.
+pub const fn scratch_bytes(version: u8) -> Result<usize, Error> {
+    if version < 1 || version > MAX_VERSION {
+        return Err(Error::Version);
+    }
+    Ok(raw_codewords(version) + max_data_codewords(version) + 255 + rs::WORK_BYTES)
+}
+
+const fn max_data_codewords(version: u8) -> usize {
+    let total = raw_codewords(version);
+    let mut maximum = 0;
+    let mut level = 0;
+    while level < 4 {
+        let data = total
+            - tables::ECC[level][version as usize] as usize
+                * tables::BLOCKS[level][version as usize] as usize;
+        if data > maximum {
+            maximum = data;
+        }
+        level += 1;
+    }
+    maximum
+}
+
 /// Writes alignment center module coordinates; returns their number (0 for V1/invalid version).
 pub fn alignment_positions(version: u8, positions: &mut [u8; 7]) -> usize {
     if !(2..=40).contains(&version) {
@@ -840,6 +871,24 @@ mod tests {
                 assert_eq!(nearest(word(valid), bad, lo, hi, word), Some((valid, 0)));
             }
             assert_eq!(nearest(word(lo), word(hi), lo, hi, word), None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    use super::*;
+    #[test]
+    fn layout_covers_every_error_correction_level() {
+        for version in 1..=MAX_VERSION {
+            let maximum = max_data_codewords(version);
+            for level in 0..4 {
+                let data = raw_codewords(version)
+                    - tables::ECC[level][version as usize] as usize
+                        * tables::BLOCKS[level][version as usize] as usize;
+                assert!(data <= maximum);
+            }
+            assert!(scratch_bytes(version).unwrap() <= SCRATCH_BYTES);
         }
     }
 }

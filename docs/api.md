@@ -9,19 +9,28 @@ When using the decoder from multiple tasks, give each task separate scratch and 
 
 | Region | Required size | Alignment |
 | --- | ---: | ---: |
-| Core scratch | `qr::core::SCRATCH_BYTES` = 7077 bytes | 1 |
+| Model 2 matrix core scratch | `qr::core::scratch_bytes(version)?` bytes (460 for V1, 7077 for V40) | 1 |
+| Model 2 image / Tracker core scratch | `qr::core::SCRATCH_BYTES` = 7077 bytes | 1 |
+| Micro QR matrix / image core scratch | `qr::core::MICRO_SCRATCH_BYTES` = 184 bytes | 1 |
 | Detector scratch | `3917 + 20 × max_finders` bytes | 1 |
 | Optional Model 2 local cache | `Config::local_cache_bytes(width)` = `5 × width` bytes | 1 |
 | Payload | Up to 7089 bytes; may be smaller for the application | 1 |
 | Segments | An array of `Segment`; conservative all-input bound: 5912 entries | `align_of::<Segment>()` |
 
-With the `tessipher` package's `micro-qr` feature, matrix-only Micro QR decoding may instead use
-`MICRO_SCRATCH_BYTES` (439 bytes), a packed matrix of at most 37 bytes, and a
+With the `tessipher` package's `micro-qr` feature, Micro QR matrix decoding uses
+`MICRO_SCRATCH_BYTES` (184 bytes), a packed matrix of at most 37 bytes, and a
 payload of at most 35 bytes. The larger existing core scratch also satisfies
-this requirement. With the `tessipher` package's `micro-qr-detect` feature, the detector intentionally
-reuses the existing scratch query and `Config` limits.
+this requirement. With the `tessipher` package's `micro-qr-detect` feature, Micro QR image decoding
+also needs only 184 core scratch bytes; its separate detector scratch still uses
+`Config::scratch_bytes()` and the existing `Config` limits.
 
-Core scratch is divided into raw codewords (3706 bytes), data codewords (2956), one RS block (255), and RS workspace (160).
+Model 2 core scratch is divided into version-sized raw and data codeword regions,
+one RS block (255 bytes), and RS workspace (160 bytes).
+The raw and data regions reach maxima of 3706 and 2956 bytes at V40;
+at V1 they use 26 and 19 bytes, for a total of `26 + 19 + 255 + 160 = 460` bytes.
+The data region covers the largest data-codeword count across all ECC levels for the version.
+Micro QR core scratch holds up to 24 raw codewords and 160 bytes of RS workspace;
+it corrects codewords in place and parses the data prefix without separate data or RS-block buffers.
 Detector scratch holds only the packed matrix of up to 177×177 modules and finder records.
 It does not create a binary image, integral image, or additional frame proportional to image area.
 With the default 32 finders, detector scratch stays at 4557 bytes when the width limit changes from 320 to 640.
@@ -246,3 +255,5 @@ likewise adds the cache to the tracked method. Query capacity using
 `config.local_cache_bytes(image.width())?` and place this separate buffer in
 internal RAM. Existing APIs and scratch sizes are unchanged.
 See [row-cache behavior, budgets and measurements](detection.md#optional-internal-ram-local-row-cache).
+
+Model 2 matrix decoding can allocate `qr::core::scratch_bytes(version)?` bytes (460 for V1, 7077 for V40). This const query rejects versions outside 1–40 with `Error::Version`. Image detection and tracking need the full `SCRATCH_BYTES` allocation because the version is unknown. Micro QR matrix and image decoding both need 184 core bytes.

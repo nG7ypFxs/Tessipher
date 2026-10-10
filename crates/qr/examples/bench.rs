@@ -17,6 +17,20 @@ fn main() {
         *t = start.elapsed().as_secs_f64() * 1e6;
     }
     report("matrix-V7-H-mask3", times);
+    for version in [1, 7, 32, 40] {
+        println!(
+            "matrix-V{version} required_core_scratch={}",
+            core::scratch_bytes(version).unwrap()
+        );
+    }
+    let small = core::Matrix::new(include_bytes!("../../../fixtures/v1.bin"), 21).unwrap();
+    let mut minimal = vec![0; core::scratch_bytes(1).unwrap()];
+    for t in &mut times {
+        let start = Instant::now();
+        black_box(core::decode(small, &mut minimal, &mut out, &mut segments).unwrap());
+        *t = start.elapsed().as_secs_f64() * 1e6;
+    }
+    report("matrix-V1-minimal-scratch", times);
     // Higher versions exercise the larger alignment-center grids.
     for (version, bits) in [
         (32, include_bytes!("../../../fixtures/v32.bin").as_slice()),
@@ -25,7 +39,15 @@ fn main() {
         let matrix = core::Matrix::new(bits, version * 4 + 17).unwrap();
         for t in &mut times {
             let start = Instant::now();
-            black_box(core::decode(matrix, &mut cs, &mut out, &mut segments).unwrap());
+            black_box(
+                core::decode(
+                    matrix,
+                    &mut cs[..core::scratch_bytes(matrix.version()).unwrap()],
+                    &mut out,
+                    &mut segments,
+                )
+                .unwrap(),
+            );
             *t = start.elapsed().as_secs_f64() * 1e6;
         }
         report(&format!("matrix-V{version}"), times);

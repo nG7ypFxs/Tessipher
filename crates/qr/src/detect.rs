@@ -810,7 +810,13 @@ fn decode_sampling_inner<const W: usize, const H: usize>(
     cache: Option<&mut [u8]>,
 ) -> Result<Detection, Error> {
     *stats = Stats::default();
-    validate_input(image, config, scratch, core_scratch)?;
+    validate_input(
+        image,
+        config,
+        scratch,
+        core_scratch,
+        crate::core::SCRATCH_BYTES,
+    )?;
     if let Some(bytes) = cache.as_ref() {
         if bytes.len() < config.local_cache_bytes(image.width)? {
             return Err(Error::ScratchTooSmall);
@@ -840,7 +846,8 @@ fn decode_sampling_inner<const W: usize, const H: usize>(
 /// Detects and decodes one Micro QR symbol using its single finder pattern.
 ///
 /// This opt-in API shares [`Config`] validation, caller-owned scratch, pass
-/// ordering, polarity handling, and work budgets with Model 2 detection.
+/// ordering, polarity handling, and work budgets with Model 2 detection. Supply
+/// at least [`crate::core::MICRO_SCRATCH_BYTES`] bytes of core scratch.
 #[cfg(feature = "micro-qr-detect")]
 #[allow(clippy::too_many_arguments)]
 pub fn decode_micro<const W: usize, const H: usize>(
@@ -900,7 +907,13 @@ pub fn decode_micro_with_sampling<const W: usize, const H: usize>(
     stats: &mut Stats,
 ) -> Result<MicroDetection, Error> {
     *stats = Stats::default();
-    validate_input(image, config, scratch, core_scratch)?;
+    validate_input(
+        image,
+        config,
+        scratch,
+        core_scratch,
+        crate::core::MICRO_SCRATCH_BYTES,
+    )?;
     let budget = PixelBudget::new(config.max_pixel_reads);
     let result = decode_micro_inner(
         image,
@@ -1144,6 +1157,7 @@ fn validate_input<const W: usize, const H: usize>(
     config: &Config<W, H>,
     scratch: &[u8],
     core_scratch: &[u8],
+    required_core_bytes: usize,
 ) -> Result<(), Error> {
     let needed = config.scratch_bytes()?;
     if image.width > W || image.height > H {
@@ -1152,7 +1166,7 @@ fn validate_input<const W: usize, const H: usize>(
     if scratch.len() < needed {
         return Err(Error::ScratchTooSmall);
     }
-    if core_scratch.len() < crate::core::SCRATCH_BYTES {
+    if core_scratch.len() < required_core_bytes {
         return Err(Error::Decode(crate::core::Error::ScratchTooSmall));
     }
     Ok(())
@@ -1803,7 +1817,13 @@ impl Tracker {
         mut cache: Option<&mut [u8]>,
     ) -> Result<Detection, Error> {
         *stats = Stats::default();
-        validate_input(image, config, scratch, core_scratch)?;
+        validate_input(
+            image,
+            config,
+            scratch,
+            core_scratch,
+            crate::core::SCRATCH_BYTES,
+        )?;
         if let Some(bytes) = cache.as_ref() {
             if bytes.len() < config.local_cache_bytes(image.width)? {
                 return Err(Error::ScratchTooSmall);

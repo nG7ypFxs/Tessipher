@@ -20,11 +20,11 @@
 #endif
 
 #if QR_HAS_MICRO_QR
-static uint8_t matrix_scratch[439];
+static uint8_t matrix_scratch[184];
 static uint8_t payload[35];
 static qr_segment segments[16];
 #if QR_HAS_MICRO_QR_DETECT
-static uint8_t image_scratch[7077];
+static uint8_t image_scratch[184];
 static uint8_t detector_scratch[8192];
 static uint8_t pixels[96 * 99];
 #endif

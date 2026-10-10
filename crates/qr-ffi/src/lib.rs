@@ -42,9 +42,9 @@ abi_schema!();
 #[cfg(feature = "micro-qr")]
 pub const QR_MICRO_EC_NONE: u32 = u32::MAX;
 #[cfg(feature = "micro-qr")]
-const MICRO_MATRIX_CORE_SCRATCH_BYTES: usize = 439;
+const MICRO_MATRIX_CORE_SCRATCH_BYTES: usize = 184;
 #[cfg(feature = "micro-qr")]
-const MICRO_IMAGE_CORE_SCRATCH_BYTES: usize = qcore::SCRATCH_BYTES;
+const MICRO_IMAGE_CORE_SCRATCH_BYTES: usize = MICRO_MATRIX_CORE_SCRATCH_BYTES;
 #[cfg(feature = "micro-qr")]
 const MICRO_MAX_PAYLOAD_BYTES: usize = 35;
 #[cfg(feature = "micro-qr")]
@@ -259,6 +259,26 @@ pub unsafe extern "C" fn qr_memory(c: *const QrConfig, out: *mut QrMemory) -> i3
         Err(e) => e,
     }
 }
+/// Queries byte-aligned scratch required by Model 2 matrix decoding for version 1..=40.
+/// Invalid versions return QR_VERSION (104). `out` is written only on success. Image decoding uses qr_memory instead.
+///
+/// # Safety
+/// `out` must point to an aligned, writable `size_t`.
+#[no_mangle]
+pub unsafe extern "C" fn qr_matrix_scratch_bytes(version: u32, out: *mut usize) -> i32 {
+    let run = || -> Result<(), i32> {
+        range(out, 1)?;
+        let version = u8::try_from(version).map_err(|_| qcore::Error::Version as i32 + 100)?;
+        let needed = qcore::scratch_bytes(version).map_err(|e| e as i32 + 100)?;
+        unsafe { out.write(needed) };
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+
 /// Queries the linked Micro QR limits, scratch requirements, and
 /// additive C type layouts without changing [`QrMemory`] or ABI version 1.
 ///
@@ -369,7 +389,7 @@ pub unsafe extern "C" fn qr_decode_micro_matrix(
 /// Decodes a packed row-major, MSB-first matrix without row padding.
 ///
 /// `side` must be `17 + 4 * version` for version 1..=40. Supply at least
-/// [`qr::core::SCRATCH_BYTES`] scratch bytes. Segment capacity may not exceed
+/// [`qr_matrix_scratch_bytes`] scratch bytes for the version. Segment capacity may not exceed
 /// [`qr::core::MAX_SEGMENTS`]. Both output capacities may be smaller than the
 /// maximum; insufficient space returns a core capacity error.
 /// Normal orientation is tried first, then its transpose after content errors.

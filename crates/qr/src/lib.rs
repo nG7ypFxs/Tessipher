@@ -9,6 +9,11 @@
 //! The package is published as `tessipher` while its stable Rust library name
 //! remains `qr`, so applications can write `use qr::core::Matrix;`.
 //!
+//! For sampled Model 2 matrices, [`core::scratch_bytes`] permits smaller allocations
+//! when the version is known (460 bytes at V1). Image detection and tracking use
+//! the version-independent [`core::SCRATCH_BYTES`] bound. Micro QR matrix and image
+//! decoding use `core::MICRO_SCRATCH_BYTES` when the Micro QR features are enabled.
+//!
 //! ```
 //! # #[cfg(feature = "detect")]
 //! # fn main() -> Result<(), qr::detect::Error> {

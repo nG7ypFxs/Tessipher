@@ -365,6 +365,10 @@ Record measurements with and without interrupts alongside clock frequency, flash
 `examples/mcu_measure.c` is a template showing only the measurement boundaries.
 The board supplies `board_cycles` and `board_record`; the caller also manages the image, storage, and initialization.
 Cycle counts on a physical board, stack watermarks, and success rates on camera input have not been measured.
+For a reproducible macOS live-camera timing harness with a preview, explicit
+start delay, borrowed luma-plane input, and paired stateless/tracker strategies,
+see [the macOS camera benchmark](mac-camera-benchmark.md). Its status success
+fraction is not a recognition-accuracy measurement.
 
 
 ## Sampling default, explicit counters, and tracking

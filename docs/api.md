@@ -11,6 +11,7 @@ When using the decoder from multiple tasks, give each task separate scratch and 
 | --- | ---: | ---: |
 | Core scratch | `qr::core::SCRATCH_BYTES` = 7077 bytes | 1 |
 | Detector scratch | `3917 + 20 × max_finders` bytes | 1 |
+| Optional Model 2 local cache | `Config::local_cache_bytes(width)` = `5 × width` bytes | 1 |
 | Payload | Up to 7089 bytes; may be smaller for the application | 1 |
 | Segments | An array of `Segment`; conservative all-input bound: 5912 entries | `align_of::<Segment>()` |
 
@@ -235,3 +236,13 @@ header names that choice as `QR_DEFAULT_SAMPLING_STRATEGY`. Explicit C sampling
 uses fixed integer selectors 0 and 1; unknown selectors return `QR_INVALID_CONFIG`.
 This preserves binary layout and symbols but changes behavior on failed center
 attempts, including retry/pixel consumption and which candidate is examined next.
+
+## Optional Model 2 local cache
+
+The facade exports `decode_gray_with_sampling_cached`, also available as
+`detect::decode_with_sampling_cached`. It adds a final caller-owned `&mut [u8]`
+cache argument to `decode_gray_with_sampling`; `Tracker::decode_with_stats_cached`
+likewise adds the cache to the tracked method. Query capacity using
+`config.local_cache_bytes(image.width())?` and place this separate buffer in
+internal RAM. Existing APIs and scratch sizes are unchanged.
+See [row-cache behavior, budgets and measurements](detection.md#optional-internal-ram-local-row-cache).

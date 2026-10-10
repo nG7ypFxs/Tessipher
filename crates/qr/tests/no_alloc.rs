@@ -164,6 +164,7 @@ fn decoding_does_not_allocate() {
     let moved_image = qr::GrayImage::new(&moved_pixels, 400, 300, 400).unwrap();
     let blank_pixels = vec![255; 400 * 300];
     let blank_image = qr::GrayImage::new(&blank_pixels, 400, 300, 400).unwrap();
+    let mut cache = [0; 5 * 640];
     let mut tracker = qr::Tracker::new();
     let mut stats = qr::Stats::default();
     start_counting();
@@ -263,6 +264,50 @@ fn decoding_does_not_allocate() {
         &mut seg,
         &mut stats,
     );
+    let cached = qr::decode_gray_with_sampling_cached(
+        img,
+        &cfg,
+        qr::SamplingStrategy::Center,
+        &mut ds,
+        &mut cs,
+        &mut out,
+        &mut seg,
+        &mut stats,
+        &mut cache,
+    );
+    let cached_tracked = tracker.decode_with_stats_cached(
+        img,
+        &cfg,
+        qr::SamplingStrategy::Center,
+        &mut ds,
+        &mut cs,
+        &mut out,
+        &mut seg,
+        &mut stats,
+        &mut cache,
+    );
+    let cached_blank = tracker.decode_with_stats_cached(
+        blank_image,
+        &cfg,
+        qr::SamplingStrategy::Center,
+        &mut ds,
+        &mut cs,
+        &mut out,
+        &mut seg,
+        &mut stats,
+        &mut cache,
+    );
+    let cached_blank_again = tracker.decode_with_stats_cached(
+        blank_image,
+        &cfg,
+        qr::SamplingStrategy::Center,
+        &mut ds,
+        &mut cs,
+        &mut out,
+        &mut seg,
+        &mut stats,
+        &mut cache,
+    );
     let allocations = stop_counting();
     assert!(
         a.is_ok()
@@ -280,6 +325,9 @@ fn decoding_does_not_allocate() {
     assert!(matches!(candidate, qr::TrackerState::Candidate { .. }));
     assert_eq!(tracker.state(), qr::TrackerState::Searching);
     assert_eq!(h.unwrap().stats.retries, 2);
+    assert!(cached.is_ok() && cached_tracked.is_ok());
+    assert_eq!(cached_blank, Err(qr::detect::Error::NotFound));
+    assert_eq!(cached_blank_again, Err(qr::detect::Error::NotFound));
     assert_eq!(allocations, 0);
 }
 

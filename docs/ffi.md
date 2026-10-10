@@ -129,6 +129,9 @@ payload length. The public API decodes at most one symbol per call.
 | `qr_decode_gray` | Decode a Gray8 image with default sampling and 64,000,000 pixel reads. |
 | `qr_decode_gray_with_budget` | Gray8 with an explicit pixel-read limit. |
 | `qr_decode_gray_with_sampling` | Gray8 with explicit pixel limit and sampling strategy, and optional `qr_stats`. |
+| `qr_local_cache_memory` | Query optional five-row cache size for a validated width. |
+| `qr_decode_gray_with_sampling_cached` | Model 2 Gray8 with optional internal-RAM row cache. |
+| `qr_tracker_decode_gray_cached` | Tracked Model 2 Gray8 with caller-owned row cache. |
 | `qr_tracker_memory` | Query target sizes/alignment for `qr_tracker` and `qr_stats`. |
 | `qr_tracker_init` / `qr_tracker_reset` | Initialize state or discard a saved tracking hint. |
 | `qr_tracker_decode_gray` | Decode successive frames using caller-owned tracking, explicit budget/strategy, and optional stats. |
@@ -440,3 +443,30 @@ validation and one min/max read, rather than measuring buffer clearing alone.
 Both benchmark allocation/input generation and output printing are outside timing.
 See [performance evaluation](sampling-performance.md) for the measured failure
 cost and the limitations of host results.
+
+## Optional local Gray8 row cache
+
+`qr_local_cache_memory(config, width, &bytes)` separately queries `5 * width`
+bytes, alignment one. It validates configuration and width; the ABI-1
+`qr_memory_info` layout and existing symbols are unchanged.
+`qr_decode_gray_with_sampling_cached(..., result, stats, cache, cache_len)` and
+`qr_tracker_decode_gray_cached(..., result, stats, cache, cache_len)` take the
+same sampling selector, input-read budget, and optional stats as their uncached
+counterparts. These APIs support Model 2 only.
+
+Place the caller-owned cache in internal RAM. Only horizontal local finder scans
+fill complete rows; irregular helpers use existing hits and directly read misses
+without replacing rows. Tags reset every call and every tracker ROI/full retry;
+tracker budgets and state commits retain their original contract.
+`cache_len` must cover `5 * width`; shorter capacity returns 13. All provided
+cache bytes, including excess capacity, must be exclusive and disjoint from every
+input/output/config/tracker/stats span. Numeric overlap checks happen before
+creating any writable Rust slice. Only the required prefix is initialized; excess
+bytes remain untouched. Result/stats write rules match the uncached functions,
+including untouched stats on earlier argument/capacity rejection.
+
+`pixel_reads` and the input-read limit include fills and direct input reads,
+exclude internal-RAM hits. Prefetch may exhaust a finite budget earlier, so equal
+budgets do not guarantee equal outcomes. This is a source-read optimization;
+physical SDRAM traffic and Cortex-M7 timings need separate hardware measurements.
+See [cache behavior and fixture evidence](detection.md#optional-internal-ram-local-row-cache).

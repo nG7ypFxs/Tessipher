@@ -706,3 +706,196 @@ fn default_pixel_limit_stays_finite_with_large_compile_time_image_maxima() {
     assert_eq!(stats.candidates, 0);
     assert_eq!(stats.retries, 0);
 }
+
+#[test]
+fn cached_detection_matches_fixtures_and_local_input_reads_fall() {
+    let config = DefaultConfig {
+        max_pixel_reads: usize::MAX,
+        ..Default::default()
+    };
+    let mut ds = vec![0; config.scratch_bytes().unwrap()];
+    let mut cs = vec![0; SCRATCH_BYTES];
+    let mut cache = vec![0xa5; 5 * 640 + 9];
+    for file in [
+        include_bytes!("../../../fixtures/v1.pgm").as_slice(),
+        include_bytes!("../../../fixtures/lighting-v2.pgm").as_slice(),
+        include_bytes!("../../../fixtures/perspective-v7.pgm").as_slice(),
+    ] {
+        let offset = file
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b == b'\n')
+            .nth(2)
+            .unwrap()
+            .0
+            + 1;
+        let width = if file.len() - offset == 145 * 145 {
+            145
+        } else {
+            360
+        };
+        for inverted in [false, true] {
+            let pixels: Vec<_> = file[offset..]
+                .iter()
+                .map(|&v| if inverted { 255 - v } else { v })
+                .collect();
+            let image = GrayImage::new(&pixels, width, width, width).unwrap();
+            for strategy in [
+                SamplingStrategy::Center,
+                SamplingStrategy::CenterThenMajority5,
+            ] {
+                let mut plain_out = [0; 32];
+                let mut cached_out = [0; 32];
+                let mut plain_seg = [Segment::EMPTY; 8];
+                let mut cached_seg = [Segment::EMPTY; 8];
+                let mut stats = Stats::default();
+                let plain = decode_with_sampling(
+                    image,
+                    &config,
+                    strategy,
+                    &mut ds,
+                    &mut cs,
+                    &mut plain_out,
+                    &mut plain_seg,
+                    &mut stats,
+                )
+                .unwrap();
+                cache.fill(0xa5);
+                let cached = decode_with_sampling_cached(
+                    image,
+                    &config,
+                    strategy,
+                    &mut ds,
+                    &mut cs,
+                    &mut cached_out,
+                    &mut cached_seg,
+                    &mut stats,
+                    &mut cache,
+                )
+                .unwrap();
+                assert_eq!(cached.stats, stats);
+                let mut normalized = cached;
+                normalized.stats.pixel_reads = plain.stats.pixel_reads;
+                assert_eq!(plain, normalized);
+                assert_eq!(plain_out, cached_out);
+                assert_eq!(plain_seg, cached_seg);
+                assert!(cache[5 * width..].iter().all(|&b| b == 0xa5));
+                if plain.local_threshold {
+                    eprintln!(
+                        "cached local inverted={inverted}: {} -> {} input reads",
+                        plain.stats.pixel_reads, cached.stats.pixel_reads
+                    );
+                    assert!(cached.stats.pixel_reads < plain.stats.pixel_reads);
+                }
+            }
+        }
+    }
+}
+#[test]
+fn cached_capacity_validation_and_local_budget_boundaries() {
+    let cfg = Config::<8, 8>::default();
+    assert_eq!(cfg.local_cache_bytes(0), Err(Error::InvalidConfig));
+    assert_eq!(cfg.local_cache_bytes(9), Err(Error::InvalidConfig));
+    assert_eq!(cfg.local_cache_bytes(8), Ok(40));
+    assert_eq!(
+        Config::<0, 8>::default().local_cache_bytes(1),
+        Err(Error::InvalidConfig)
+    );
+    assert_eq!(
+        Config::<{ usize::MAX }, 8>::default().local_cache_bytes(usize::MAX),
+        Err(Error::InvalidConfig)
+    );
+    let pixels: Vec<_> = (0..64).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();
+    let image = GrayImage::new(&pixels, 8, 8, 8).unwrap();
+    let mut ds = vec![0; cfg.scratch_bytes().unwrap()];
+    let mut cs = [0; SCRATCH_BYTES];
+    let mut cache = [0xa5; 41];
+    let mut stats = Stats::default();
+    assert_eq!(
+        decode_with_sampling_cached(
+            image,
+            &cfg,
+            SamplingStrategy::Center,
+            &mut ds,
+            &mut cs,
+            &mut [],
+            &mut [],
+            &mut stats,
+            &mut cache[..39]
+        ),
+        Err(Error::ScratchTooSmall)
+    );
+    assert_eq!(stats, Stats::default());
+    for limit in [1, 64, 192, 193, 199, 200, 201, 231, 232, 10000] {
+        let config = Config {
+            max_pixel_reads: limit,
+            ..cfg
+        };
+        let result = decode_with_sampling_cached(
+            image,
+            &config,
+            SamplingStrategy::Center,
+            &mut ds,
+            &mut cs,
+            &mut [],
+            &mut [],
+            &mut stats,
+            &mut cache,
+        );
+        assert!(stats.pixel_reads <= limit);
+        if result == Err(Error::PixelBudget) {
+            assert_eq!(stats.pixel_reads, limit);
+        }
+        assert_eq!(cache[40], 0xa5);
+    }
+}
+
+#[test]
+fn cached_no_finder_local_scan_reduces_input_reads() {
+    let (width, height, stride) = (97, 83, 103);
+    let pixels: Vec<_> = (0..stride * height)
+        .map(|i| ((i * 17 + i / stride * 31) % 256) as u8)
+        .collect();
+    let image = GrayImage::new(&pixels, width, height, stride).unwrap();
+    let cfg = DefaultConfig {
+        max_pixel_reads: usize::MAX,
+        ..Default::default()
+    };
+    let mut ds = vec![0; cfg.scratch_bytes().unwrap()];
+    let mut cs = [0; SCRATCH_BYTES];
+    let mut raw = Stats::default();
+    let mut cached = Stats::default();
+    let mut cache = vec![0; width * 5];
+    let a = decode_with_sampling(
+        image,
+        &cfg,
+        SamplingStrategy::Center,
+        &mut ds,
+        &mut cs,
+        &mut [],
+        &mut [],
+        &mut raw,
+    );
+    let b = decode_with_sampling_cached(
+        image,
+        &cfg,
+        SamplingStrategy::Center,
+        &mut ds,
+        &mut cs,
+        &mut [],
+        &mut [],
+        &mut cached,
+        &mut cache,
+    );
+    assert_eq!(a, b);
+    assert_eq!(a, Err(Error::NotFound));
+    assert_eq!(raw.passes, 4);
+    assert_eq!(raw.finder_observations, 0);
+    eprintln!(
+        "no-finder local scan: {} -> {} reads",
+        raw.pixel_reads, cached.pixel_reads
+    );
+    assert!(cached.pixel_reads < raw.pixel_reads);
+    cached.pixel_reads = raw.pixel_reads;
+    assert_eq!(raw, cached);
+}

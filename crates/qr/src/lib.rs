@@ -47,6 +47,7 @@ pub use core::{
 #[cfg(feature = "detect")]
 pub use detect::{
     decode as decode_gray, decode_with_sampling as decode_gray_with_sampling,
+    decode_with_sampling_cached as decode_gray_with_sampling_cached,
     decode_with_stats as decode_gray_with_stats, Config, DefaultConfig, Detection, GrayImage, Rect,
     SamplingStrategy, Stats, TrackHint, Tracker, TrackerState, TrackerStats,
 };

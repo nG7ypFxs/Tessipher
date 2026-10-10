@@ -955,7 +955,36 @@ pub unsafe extern "C" fn qr_tracker_init(out: *mut QrTracker) -> i32 {
 pub unsafe extern "C" fn qr_tracker_reset(out: *mut QrTracker) -> i32 {
     unsafe { qr_tracker_init(out) }
 }
+/// Queries optional local cache bytes (alignment one), preserving ABI-1 memory layouts.
+/// Zero or oversized widths and invalid configurations return 12. Output is
+/// written only on success.
+/// # Safety
+/// `c` is readable and initialized; `out` names one exclusive writable usize.
+/// Both objects must be aligned, live, and disjoint.
+#[no_mangle]
+pub unsafe extern "C" fn qr_local_cache_memory(
+    c: *const QrConfig,
+    width: usize,
+    out: *mut usize,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        disjoint(&[range(c, 1)?, range(out, 1)?])?;
+        let needed = config(unsafe { c.read() })
+            .local_cache_bytes(width)
+            .map_err(status)?;
+        unsafe {
+            out.write(needed);
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+#[derive(Clone, Copy)]
 struct GrayCall {
+    cache: Option<(*mut u8, usize)>,
     c: *const QrConfig,
     max_pixel_reads: usize,
     strategy: u32,
@@ -982,6 +1011,10 @@ unsafe fn gray_call(a: GrayCall) -> i32 {
             return Err(1);
         }
         disjoint(&[
+            match a.cache {
+                Some((p, n)) => range(p, n)?,
+                None => Range { start: 0, end: 0 },
+            },
             range(a.c, 1)?,
             range(a.pixels, a.pixels_len)?,
             range(a.detector_scratch, a.detector_scratch_len)?,
@@ -1010,6 +1043,16 @@ unsafe fn gray_call(a: GrayCall) -> i32 {
             a.stride,
         )
         .map_err(status)?;
+        let cache_needed = match a.cache {
+            Some((_, n)) => {
+                let needed = cfg.local_cache_bytes(a.width).map_err(status)?;
+                if n < needed {
+                    return Err(13);
+                }
+                needed
+            }
+            None => 0,
+        };
         let previous = tracker.as_ref().map(detect::Tracker::state);
         let mut stats = detect::Stats::default();
         // All numeric ranges, state fields and overlaps were checked before initialization.
@@ -1017,11 +1060,19 @@ unsafe fn gray_call(a: GrayCall) -> i32 {
         let cs = unsafe { bytes_mut(a.core_scratch, a.core_scratch_len) };
         let output = unsafe { bytes_mut(a.payload, a.payload_len) };
         let segments = unsafe { segments_mut(a.segments, a.segment_capacity) };
-        let decoded = match tracker.as_mut() {
-            Some(t) => {
+        // Initialize only the required prefix, even when C supplied excess capacity.
+        let cache = a.cache.map(|(p, _)| unsafe { bytes_mut(p, cache_needed) });
+        let decoded = match (tracker.as_mut(), cache) {
+            (Some(t), Some(cache)) => t.decode_with_stats_cached(
+                image, &cfg, strategy, ds, cs, output, segments, &mut stats, cache,
+            ),
+            (None, Some(cache)) => detect::decode_with_sampling_cached(
+                image, &cfg, strategy, ds, cs, output, segments, &mut stats, cache,
+            ),
+            (Some(t), None) => {
                 t.decode_with_stats(image, &cfg, strategy, ds, cs, output, segments, &mut stats)
             }
-            None => detect::decode_with_sampling(
+            (None, None) => detect::decode_with_sampling(
                 image, &cfg, strategy, ds, cs, output, segments, &mut stats,
             ),
         };
@@ -1082,6 +1133,62 @@ pub unsafe extern "C" fn qr_decode_gray_with_sampling(
 ) -> i32 {
     unsafe {
         gray_call(GrayCall {
+            cache: None,
+            c,
+            max_pixel_reads,
+            strategy,
+            tracker: None,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            stats,
+        })
+    }
+}
+
+/// Optional internal-RAM five-row cache; all supplied spans must be disjoint.
+/// Excess cache capacity is untouched. Input reads include fills and exclude hits.
+/// # Safety
+/// All pointer contracts of the corresponding uncached function apply. Cache
+/// must name `cache_len` exclusively writable bytes, disjoint from every span.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_decode_gray_with_sampling_cached(
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    strategy: u32,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrResult,
+    stats: *mut QrStats,
+    cache: *mut u8,
+    cache_len: usize,
+) -> i32 {
+    unsafe {
+        gray_call(GrayCall {
+            cache: Some((cache, cache_len)),
             c,
             max_pixel_reads,
             strategy,
@@ -1143,6 +1250,63 @@ pub unsafe extern "C" fn qr_tracker_decode_gray(
 ) -> i32 {
     unsafe {
         gray_call(GrayCall {
+            cache: None,
+            c,
+            max_pixel_reads,
+            strategy,
+            tracker: Some(tracker),
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            stats,
+        })
+    }
+}
+
+/// Optional internal-RAM five-row cache; all supplied spans must be disjoint.
+/// Excess cache capacity is untouched. Input reads include fills and exclude hits.
+/// # Safety
+/// All pointer contracts of the corresponding uncached function apply. Cache
+/// must name `cache_len` exclusively writable bytes, disjoint from every span.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_tracker_decode_gray_cached(
+    tracker: *mut QrTracker,
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    strategy: u32,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrResult,
+    stats: *mut QrStats,
+    cache: *mut u8,
+    cache_len: usize,
+) -> i32 {
+    unsafe {
+        gray_call(GrayCall {
+            cache: Some((cache, cache_len)),
             c,
             max_pixel_reads,
             strategy,
@@ -1169,6 +1333,144 @@ pub unsafe extern "C" fn qr_tracker_decode_gray(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_c_contracts_query_overlap_capacity_stats_and_tail() {
+        let cfg = QrConfig {
+            max_finders: 32,
+            max_candidates: 4096,
+            max_retries: 256,
+            row_step: 1,
+            local_radius: 24,
+        };
+        let mut needed = 777usize;
+        unsafe {
+            assert_eq!(qr_local_cache_memory(&cfg, 8, &mut needed), 0);
+            assert_eq!(needed, 40);
+            assert_eq!(qr_local_cache_memory(&cfg, 0, &mut needed), 12);
+            assert_eq!(qr_local_cache_memory(&cfg, MAX_WIDTH + 1, &mut needed), 12);
+            assert_eq!(qr_local_cache_memory(&cfg, 8, ptr::null_mut()), 1);
+            assert_eq!(qr_local_cache_memory(ptr::null(), 8, &mut needed), 1);
+            assert_eq!(
+                qr_local_cache_memory((&needed as *const usize).cast(), 8, &mut needed),
+                2
+            );
+        }
+        let pixels: [u8; 64] = core::array::from_fn(|i| if i % 2 == 0 { 0 } else { 255 });
+        let mut ds = [0; 4557];
+        let mut cs = [0; qcore::SCRATCH_BYTES];
+        let mut output = [0; 32];
+        let mut segments = [QrSegment::default(); 8];
+        let mut out = QrResult::default();
+        let mut stats = QrStats::default();
+        let mut tracker = QrTracker::default();
+        let mut cache = [0xa5; 48];
+        let args = GrayCall {
+            cache: Some((cache.as_mut_ptr(), cache.len())),
+            c: &cfg,
+            max_pixel_reads: 201,
+            strategy: 0,
+            tracker: Some(&mut tracker),
+            pixels: pixels.as_ptr(),
+            pixels_len: pixels.len(),
+            width: 8,
+            height: 8,
+            stride: 8,
+            detector_scratch: ds.as_mut_ptr(),
+            detector_scratch_len: ds.len(),
+            core_scratch: cs.as_mut_ptr(),
+            core_scratch_len: cs.len(),
+            payload: output.as_mut_ptr(),
+            payload_len: output.len(),
+            segments: segments.as_mut_ptr(),
+            segment_capacity: segments.len(),
+            out: &mut out,
+            stats: &mut stats,
+        };
+        // All cache aliases rejected before any writable slice/initialization.
+        let overlaps = [
+            args.c.cast_mut().cast::<u8>(),
+            args.pixels.cast_mut(),
+            args.detector_scratch,
+            args.core_scratch,
+            args.payload,
+            args.segments.cast(),
+            args.out.cast(),
+            args.stats.cast(),
+            args.tracker.unwrap().cast(),
+        ];
+        for p in overlaps {
+            assert_eq!(
+                unsafe {
+                    gray_call(GrayCall {
+                        cache: Some((p, 40)),
+                        ..args
+                    })
+                },
+                2
+            );
+        }
+        assert_eq!(
+            unsafe {
+                gray_call(GrayCall {
+                    cache: Some((ptr::null_mut(), 40)),
+                    ..args
+                })
+            },
+            1
+        );
+        assert_eq!(
+            unsafe {
+                gray_call(GrayCall {
+                    cache: Some(((usize::MAX - 3) as *mut u8, 40)),
+                    ..args
+                })
+            },
+            1
+        );
+        stats.pixel_reads = 777;
+        assert_eq!(
+            unsafe {
+                gray_call(GrayCall {
+                    cache: Some((cache.as_mut_ptr(), 39)),
+                    ..args
+                })
+            },
+            13
+        );
+        assert_eq!(stats.pixel_reads, 777);
+        assert_eq!(
+            unsafe {
+                gray_call(GrayCall {
+                    cache: Some((ptr::null_mut(), 0)),
+                    ..args
+                })
+            },
+            13
+        );
+        assert_eq!(
+            unsafe {
+                gray_call(GrayCall {
+                    cache: Some((cache.as_mut_ptr(), 40)),
+                    ..args
+                })
+            },
+            18
+        );
+        assert_eq!(stats.pixel_reads, 201);
+        assert_eq!(tracker.tag, 0);
+        assert!(cache[40..].iter().all(|&v| v == 0xa5));
+        assert_eq!(unsafe { gray_call(args) }, 18);
+        assert!(cache[40..].iter().all(|&v| v == 0xa5));
+        assert_eq!(
+            unsafe {
+                gray_call(GrayCall {
+                    stats: ptr::null_mut(),
+                    ..args
+                })
+            },
+            18
+        );
+    }
     #[test]
     fn integer_tracker_roundtrips_and_rejects_noncanonical_fields() {
         let hint = detect::TrackHint {

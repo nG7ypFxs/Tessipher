@@ -701,3 +701,209 @@ fn safe_tracker_restore_roundtrips_valid_states_and_rejects_invalid_hints() {
         );
     }
 }
+
+#[test]
+fn cached_tracker_reuses_storage_and_shares_roi_full_budget() {
+    let config = DefaultConfig {
+        max_pixel_reads: usize::MAX,
+        ..Default::default()
+    };
+    let (qr, side) = symbol(4, false, false);
+    let stable = frame(&qr, side, 320, 240, 24, 24);
+    let moved = frame(&qr, side, 320, 240, 200, 140);
+    let blank = vec![255; 320 * 240];
+    let mut raw_tracker = Tracker::new();
+    let mut cached_tracker = Tracker::new();
+    let mut cache = vec![0xa5; 5 * 640 + 1];
+    let mut ds = vec![0; config.scratch_bytes().unwrap()];
+    let mut cs = [0; SCRATCH_BYTES];
+    let mut output = [0; 32];
+    let mut segments = [Segment::EMPTY; 8];
+    let mut stats = Stats::default();
+    // A moved symbol forces ROI failure followed by full-frame success; two
+    // blank frames exercise failed-state commits, then stride/dimension changes.
+    for (pixels, w, h, stride) in [
+        (&stable[..], 320, 240, 320),
+        (&stable[..], 320, 240, 320),
+        (&moved[..], 320, 240, 320),
+        (&blank[..], 320, 240, 320),
+        (&blank[..], 320, 240, 320),
+        (&qr[..], side, side, side),
+        (&stable[..], 310, 230, 320),
+    ] {
+        let image = GrayImage::new(pixels, w, h, stride).unwrap();
+        let (raw, raw_stats) = call(
+            image,
+            &config,
+            SamplingStrategy::Center,
+            Some(&mut raw_tracker),
+            true,
+        );
+        let cached = cached_tracker.decode_with_stats_cached(
+            image,
+            &config,
+            SamplingStrategy::Center,
+            &mut ds,
+            &mut cs,
+            &mut output,
+            &mut segments,
+            &mut stats,
+            &mut cache,
+        );
+        assert_eq!(raw_tracker.state(), cached_tracker.state());
+        assert_eq!(stats.pixel_reads, raw_stats.pixel_reads); // these frames succeed globally
+        assert_eq!(raw, cached);
+        if let Ok(found) = cached {
+            assert_eq!(&output[..found.decoded.payload_len], b"TEST");
+        }
+    }
+    assert_eq!(cache[5 * 640], 0xa5);
+    // Terminal budget/capacity rejection must preserve state, even after ROI fails.
+    let image = view(&moved, 320, 240);
+    let hint = TrackHint {
+        roi: Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+        },
+        image_width: 320,
+        image_height: 240,
+    };
+    let initial = TrackerState::Tracking { hint };
+    for limit in [1, 10000, 10001, 10000 + 320 * 240 - 1] {
+        let cfg = DefaultConfig {
+            max_pixel_reads: limit,
+            ..config
+        };
+        let mut tracker = Tracker::from_state(initial).unwrap();
+        assert_eq!(
+            tracker.decode_with_stats_cached(
+                image,
+                &cfg,
+                SamplingStrategy::Center,
+                &mut ds,
+                &mut cs,
+                &mut output,
+                &mut segments,
+                &mut stats,
+                &mut cache
+            ),
+            Err(Error::PixelBudget)
+        );
+        assert_eq!(stats.pixel_reads, limit);
+        assert_eq!(tracker.state(), initial);
+    }
+    let mut tracker = Tracker::from_state(initial).unwrap();
+    assert_eq!(
+        tracker.decode_with_stats_cached(
+            image,
+            &config,
+            SamplingStrategy::Center,
+            &mut ds,
+            &mut cs,
+            &mut [],
+            &mut segments,
+            &mut stats,
+            &mut cache
+        ),
+        Err(Error::Decode(qr::core::Error::OutputTooSmall))
+    );
+    assert_eq!(tracker.state(), initial);
+}
+
+#[test]
+fn cached_tracker_local_roi_full_attempts_have_fresh_tags() {
+    let file = include_bytes!("../../../fixtures/lighting-v2.pgm");
+    let offset = file
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| **b == b'\n')
+        .nth(2)
+        .unwrap()
+        .0
+        + 1;
+    let pixels = &file[offset..];
+    let image = view(pixels, 360, 360);
+    let cfg = DefaultConfig {
+        max_pixel_reads: usize::MAX,
+        ..Default::default()
+    };
+    let hint = TrackHint {
+        roi: Rect {
+            x: 0,
+            y: 0,
+            width: 32,
+            height: 32,
+        },
+        image_width: 360,
+        image_height: 360,
+    };
+    let initial = TrackerState::Tracking { hint };
+    let mut raw_tracker = Tracker::from_state(initial).unwrap();
+    let mut tracker = Tracker::from_state(initial).unwrap();
+    let (raw, raw_stats) = call(
+        image,
+        &cfg,
+        SamplingStrategy::Center,
+        Some(&mut raw_tracker),
+        true,
+    );
+    let mut ds = vec![0; cfg.scratch_bytes().unwrap()];
+    let mut cs = [0; SCRATCH_BYTES];
+    let mut out = [0; 32];
+    let mut segments = [Segment::EMPTY; 8];
+    let mut cache = vec![0xa5; 5 * 360];
+    let mut stats = Stats::default();
+    let cached = tracker
+        .decode_with_stats_cached(
+            image,
+            &cfg,
+            SamplingStrategy::Center,
+            &mut ds,
+            &mut cs,
+            &mut out,
+            &mut segments,
+            &mut stats,
+            &mut cache,
+        )
+        .unwrap();
+    let raw = raw.unwrap();
+    assert!(raw.local_threshold);
+    assert!(raw_stats.passes > 3);
+    assert!(stats.pixel_reads < raw_stats.pixel_reads);
+    let mut normalized = cached;
+    normalized.stats.pixel_reads = raw.stats.pixel_reads;
+    assert_eq!(raw, normalized);
+    assert_eq!(tracker.state(), raw_tracker.state());
+    assert_eq!(&out[..cached.decoded.payload_len], b"TEST");
+    // On the same buffer, another ROI/full frame with no symbol must commit
+    // recognition failure, never decode data left over from the previous frame.
+    let blank: Vec<_> = (0..360 * 360)
+        .map(|i| ((i * 17 + i / 360 * 31) % 256) as u8)
+        .collect();
+    let image = view(&blank, 360, 360);
+    let (raw, raw_stats) = call(
+        image,
+        &cfg,
+        SamplingStrategy::Center,
+        Some(&mut raw_tracker),
+        true,
+    );
+    let cached = tracker.decode_with_stats_cached(
+        image,
+        &cfg,
+        SamplingStrategy::Center,
+        &mut ds,
+        &mut cs,
+        &mut out,
+        &mut segments,
+        &mut stats,
+        &mut cache,
+    );
+    assert_eq!(raw, cached);
+    assert!(raw.is_err());
+    assert_eq!(tracker.state(), raw_tracker.state());
+    stats.pixel_reads = raw_stats.pixel_reads;
+    assert_eq!(stats, raw_stats);
+}

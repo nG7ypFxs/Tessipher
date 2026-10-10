@@ -162,3 +162,42 @@ paired gate in [performance evaluation](sampling-performance.md). Explicit Cente
 is available for callers prioritizing long-failure latency or an older tight-budget
 contract. Small `max_retries` or `max_pixel_reads` values may leave fewer candidate
 projections under the new default, even when ABI-1 struct layouts are unchanged.
+
+## Optional internal-RAM local row cache
+
+`Config::local_cache_bytes(image.width())` queries a validated `5 * width` byte
+allocation with alignment one.
+Pass it to `decode_with_sampling_cached` or `Tracker::decode_with_stats_cached`.
+The existing zero-copy APIs and detector scratch requirements stay unchanged.
+Place this separate caller-owned buffer in internal RAM when the borrowed Gray8
+image lives in external SDRAM. No allocation, unsafe code, full-frame copy,
+integral image, or persistent image storage is added.
+
+Only horizontal finder scans in local threshold passes fill complete Gray8 rows.
+Cross-checks, geometry checks, alignment and matrix sampling reuse existing hits;
+they read misses directly without replacing the scan's rows. This avoids repeated
+whole-row fills while moving vertically or sampling scattered points.
+The center read, 25 sparse samples, integer division, edge clamp, low-contrast
+fallback and polarity are identical to the uncached detector.
+For uninterrupted scans the input work approaches five reads per pixel instead
+of 26; helpers and row boundaries still cost input reads.
+
+Each decode call invalidates all row tags. Tracker ROI and full-frame attempts
+also get fresh tags, share the same frame budget and counters, and require cache
+capacity for the full supplied image width. Reuse the buffer across frames,
+strides and dimensions. Excess capacity is never initialized or written.
+A failed partial fill never becomes valid.
+
+`Stats.pixel_reads` and `Config.max_pixel_reads` count actual Gray8 input reads,
+including cache fills and repeated direct reads. Internal-RAM hits are excluded.
+Prefetch reads pixels not yet requested, so the same finite budget need not give
+the same success/failure as an uncached call. Sufficient-budget recognition and
+all non-read counters remain identical. Tiny or short scans may cost more due to
+prefetch; there is no universal read reduction or Cortex-M7 speed guarantee.
+The counter measures source accesses, not physical SDRAM transactions or bytes.
+
+Fixture evidence (center sampling, unlimited test budget): `lighting-v2.pgm`
+normal polarity succeeds locally with 7,964,308 input reads uncached versus
+4,619,163 cached (42.0% fewer); its inverted version uses 14,600,860 versus
+7,972,845 (45.4% fewer). A nonuniform 97×83 no-finder image that enters both local
+passes uses 502,295 versus 141,189 (71.9% fewer). Hardware timing is not included.

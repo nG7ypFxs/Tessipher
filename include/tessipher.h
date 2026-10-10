@@ -457,6 +457,31 @@ int32_t qr_tracker_decode_gray(qr_tracker *tracker, const qr_config *config, siz
                                size_t payload_len, qr_segment *segments, size_t segment_capacity,
                                qr_result *result, qr_stats *stats);
 
+/* Optional five-row local Gray8 cache in caller-owned internal RAM (alignment 1).
+ * Invalid config, zero width or width over compiled maximum returns QR_INVALID_CONFIG.
+ * config/out mandatory, aligned and disjoint; out written only on success. */
+int32_t qr_local_cache_memory(const qr_config *config, size_t width, size_t *out);
+/* Cached variants: cache requires 5 * width bytes. All supplied cache_len bytes
+ * must be exclusive and disjoint from every other supplied span. Excess bytes
+ * remain untouched. Tags reset each invocation and ROI/full retry. Pixel-read
+ * stats and budget count input reads during fills, exclude internal RAM hits.
+ * Horizontal finder scans fill rows; irregular helpers reuse hits, and read
+ * misses directly without replacing scan rows. Full-row prefetch can exhaust
+ * a finite budget earlier than uncached sampling.
+ * Stats is optional and follows the uncached functions' contract. */
+int32_t qr_decode_gray_with_sampling_cached(
+    const qr_config *config, size_t max_pixel_reads, uint32_t strategy, const uint8_t *pixels,
+    size_t pixels_len, size_t width, size_t height, size_t stride, uint8_t *detector_scratch,
+    size_t detector_scratch_len, uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload,
+    size_t payload_len, qr_segment *segments, size_t segment_capacity, qr_result *result,
+    qr_stats *stats, uint8_t *cache, size_t cache_len);
+int32_t qr_tracker_decode_gray_cached(
+    qr_tracker *tracker, const qr_config *config, size_t max_pixel_reads, uint32_t strategy,
+    const uint8_t *pixels, size_t pixels_len, size_t width, size_t height, size_t stride,
+    uint8_t *detector_scratch, size_t detector_scratch_len, uint8_t *core_scratch,
+    size_t core_scratch_len, uint8_t *payload, size_t payload_len, qr_segment *segments,
+    size_t segment_capacity, qr_result *result, qr_stats *stats, uint8_t *cache, size_t cache_len);
+
 #ifdef __cplusplus
 }
 #endif

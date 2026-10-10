@@ -19,7 +19,7 @@
 use crate::core::{Decoded, Matrix, Segment, MAX_MATRIX_BYTES};
 #[cfg(feature = "micro-qr-detect")]
 use crate::core::{MicroDecoded, MicroMatrix};
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 
 /// Required detector scratch alignment, in bytes (1).
 pub const SCRATCH_ALIGN: usize = 1;
@@ -201,6 +201,15 @@ impl<const W: usize, const H: usize> Config<W, H> {
         self.validate()?;
         Ok(MAX_MATRIX_BYTES + self.max_finders * FINDER_BYTES)
     }
+    /// Bytes for an optional five-row Gray8 cache in caller-owned internal RAM.
+    /// Alignment is one; `width` must fit the validated configuration.
+    pub fn local_cache_bytes(&self, width: usize) -> Result<usize, Error> {
+        self.validate()?;
+        if width == 0 || width > W {
+            return Err(Error::InvalidConfig);
+        }
+        width.checked_mul(5).ok_or(Error::InvalidConfig)
+    }
     fn validate(&self) -> Result<(), Error> {
         if W == 0
             || H == 0
@@ -268,7 +277,8 @@ impl Point {
 /// the initial min/max scan, including on low-contrast images or budget failure.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
-    /// Actual input pixel reads, including repeats; never exceeds max_pixel_reads.
+    /// Actual input pixel reads, including repeats and cache fills, excluding
+    /// cache hits in internal RAM; never exceeds max_pixel_reads.
     pub pixel_reads: usize,
     /// Rows visited by finder scanning, summed across passes.
     pub rows: usize,
@@ -379,18 +389,73 @@ impl PixelBudget {
         Ok(image.at(x, y))
     }
 }
+// Tags are scoped to one decode region. Incomplete fills never become valid.
+struct RowCache<'a> {
+    bytes: &'a mut [u8],
+    tags: [Option<usize>; 5],
+    order: [usize; 5],
+}
+impl<'a> RowCache<'a> {
+    fn new(bytes: &'a mut [u8]) -> Self {
+        Self {
+            bytes,
+            tags: [None; 5],
+            order: [0, 1, 2, 3, 4],
+        }
+    }
+    fn read(
+        &mut self,
+        image: GrayImage<'_>,
+        budget: &PixelBudget,
+        x: usize,
+        y: usize,
+        fill: bool,
+    ) -> Result<u8, Error> {
+        let slot = match self.tags.iter().position(|tag| *tag == Some(y)) {
+            Some(slot) => slot,
+            None if !fill => return budget.read(image, x, y),
+            None => {
+                let slot = self.order[0];
+                self.tags[slot] = None;
+                let start = slot * image.width;
+                for col in 0..image.width {
+                    self.bytes[start + col] = budget.read(image, col, y)?;
+                }
+                self.tags[slot] = Some(y);
+                slot
+            }
+        };
+        if fill {
+            let position = self.order.iter().position(|&n| n == slot).unwrap();
+            self.order[position..].rotate_left(1);
+        }
+        Ok(self.bytes[slot * image.width + x])
+    }
+}
 #[derive(Clone, Copy)]
 struct Binary<'a> {
     image: GrayImage<'a>,
     budget: &'a PixelBudget,
+    cache: Option<&'a RefCell<RowCache<'a>>>,
+    fill_cache: bool,
     threshold: u8,
     inverted: bool,
     local: bool,
     radius: usize,
 }
 impl Binary<'_> {
+    fn read(self, x: usize, y: usize) -> Result<u8, Error> {
+        if self.local {
+            if let Some(cache) = self.cache {
+                return cache
+                    .borrow_mut()
+                    .read(self.image, self.budget, x, y, self.fill_cache);
+            }
+        }
+        self.budget.read(self.image, x, y)
+    }
     fn dark(self, x: usize, y: usize) -> Result<bool, Error> {
-        let pixel = self.budget.read(self.image, x, y)? as u32;
+        let pixel = self.read(x, y)? as u32;
         let dark = if !self.local {
             pixel <= self.threshold as u32
         } else {
@@ -406,7 +471,7 @@ impl Binary<'_> {
                     let py = (y as i32 + j * self.radius as i32 / 2)
                         .clamp(0, self.image.height as i32 - 1)
                         as usize;
-                    let v = self.budget.read(self.image, px, py)?;
+                    let v = self.read(px, py)?;
                     sum += v as u32;
                     min = min.min(v);
                     max = max.max(v);
@@ -554,6 +619,12 @@ fn scan(
     step: usize,
     stats: &mut Stats,
 ) -> Result<(usize, bool), Error> {
+    // Preserve these five rows during irregular cross-check/geometry access.
+    // Only the continuous horizontal scan prefetches; other misses read directly.
+    let scan_bin = Binary {
+        fill_cache: true,
+        ..bin
+    };
     let mut count = 0;
     let mut overflow = false;
     for y in (0..bin.image.height).step_by(step) {
@@ -561,7 +632,7 @@ fn scan(
         let mut runs = [0usize; 5];
         let mut color = false;
         for x in 0..=bin.image.width {
-            let next = x < bin.image.width && bin.dark(x, y)?;
+            let next = x < bin.image.width && scan_bin.dark(x, y)?;
             if next == color {
                 runs[4] += 1;
                 continue;
@@ -683,8 +754,68 @@ pub fn decode_with_sampling<const W: usize, const H: usize>(
     segments: &mut [Segment],
     stats: &mut Stats,
 ) -> Result<Detection, Error> {
+    decode_sampling_inner(
+        image,
+        config,
+        strategy,
+        scratch,
+        core_scratch,
+        output,
+        segments,
+        stats,
+        None,
+    )
+}
+/// Like [`decode_with_sampling`], using five caller-owned Gray8 rows for local passes.
+/// Put `cache` in internal RAM; it needs [`Config::local_cache_bytes`] bytes.
+/// Only horizontal finder scans fill rows. Irregular helpers reuse hits and
+/// read misses directly without replacing cached rows. Tags reset on every call;
+/// excess bytes remain untouched. Cache fills count as
+/// input reads, hits do not. The same finite budget may produce a different result
+/// because a miss fetches a complete row, including pixels not yet requested.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_with_sampling_cached<const W: usize, const H: usize>(
+    image: GrayImage<'_>,
+    config: &Config<W, H>,
+    strategy: SamplingStrategy,
+    scratch: &mut [u8],
+    core_scratch: &mut [u8],
+    output: &mut [u8],
+    segments: &mut [Segment],
+    stats: &mut Stats,
+    cache: &mut [u8],
+) -> Result<Detection, Error> {
+    decode_sampling_inner(
+        image,
+        config,
+        strategy,
+        scratch,
+        core_scratch,
+        output,
+        segments,
+        stats,
+        Some(cache),
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn decode_sampling_inner<const W: usize, const H: usize>(
+    image: GrayImage<'_>,
+    config: &Config<W, H>,
+    strategy: SamplingStrategy,
+    scratch: &mut [u8],
+    core_scratch: &mut [u8],
+    output: &mut [u8],
+    segments: &mut [Segment],
+    stats: &mut Stats,
+    cache: Option<&mut [u8]>,
+) -> Result<Detection, Error> {
     *stats = Stats::default();
     validate_input(image, config, scratch, core_scratch)?;
+    if let Some(bytes) = cache.as_ref() {
+        if bytes.len() < config.local_cache_bytes(image.width)? {
+            return Err(Error::ScratchTooSmall);
+        }
+    }
     let budget = PixelBudget::new(config.max_pixel_reads);
     let result = decode_inner(
         image,
@@ -697,6 +828,7 @@ pub fn decode_with_sampling<const W: usize, const H: usize>(
         stats,
         &budget,
         None,
+        cache,
     );
     stats.pixel_reads = budget.used.get();
     result.map(|mut found| {
@@ -822,6 +954,8 @@ fn decode_micro_inner<const W: usize, const H: usize>(
         let bin = Binary {
             image,
             budget,
+            cache: None,
+            fill_cache: false,
             threshold,
             inverted: pass % 2 != 0,
             local: pass >= 2,
@@ -1035,7 +1169,9 @@ fn decode_inner<const W: usize, const H: usize>(
     stats: &mut Stats,
     budget: &PixelBudget,
     candidate_hint: Option<&mut Option<([Point; 4], usize)>>,
+    cache: Option<&mut [u8]>,
 ) -> Result<Detection, Error> {
+    let cache = cache.map(|bytes| RefCell::new(RowCache::new(bytes)));
     let (matrix, finders) = scratch.split_at_mut(MAX_MATRIX_BYTES);
     let mut min = 255u8;
     let mut max = 0u8;
@@ -1068,6 +1204,8 @@ fn decode_inner<const W: usize, const H: usize>(
         let bin = Binary {
             image,
             budget,
+            cache: cache.as_ref(),
+            fill_cache: false,
             threshold,
             inverted: pass % 2 != 0,
             local: pass >= 2,
@@ -1612,8 +1750,65 @@ impl Tracker {
         segments: &mut [Segment],
         stats: &mut TrackerStats,
     ) -> Result<Detection, Error> {
+        self.decode_sampling_inner(
+            image,
+            config,
+            strategy,
+            scratch,
+            core_scratch,
+            output,
+            segments,
+            stats,
+            None,
+        )
+    }
+    /// Cached variant of [`Self::decode_with_stats`]. Uses five full-image-width
+    /// rows of internal RAM. ROI and full-frame retries reset tags and share budgets.
+    #[allow(clippy::too_many_arguments)]
+    pub fn decode_with_stats_cached<const W: usize, const H: usize>(
+        &mut self,
+        image: GrayImage<'_>,
+        config: &Config<W, H>,
+        strategy: SamplingStrategy,
+        scratch: &mut [u8],
+        core_scratch: &mut [u8],
+        output: &mut [u8],
+        segments: &mut [Segment],
+        stats: &mut TrackerStats,
+        cache: &mut [u8],
+    ) -> Result<Detection, Error> {
+        self.decode_sampling_inner(
+            image,
+            config,
+            strategy,
+            scratch,
+            core_scratch,
+            output,
+            segments,
+            stats,
+            Some(cache),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn decode_sampling_inner<const W: usize, const H: usize>(
+        &mut self,
+        image: GrayImage<'_>,
+        config: &Config<W, H>,
+        strategy: SamplingStrategy,
+        scratch: &mut [u8],
+        core_scratch: &mut [u8],
+        output: &mut [u8],
+        segments: &mut [Segment],
+        stats: &mut TrackerStats,
+        mut cache: Option<&mut [u8]>,
+    ) -> Result<Detection, Error> {
         *stats = Stats::default();
         validate_input(image, config, scratch, core_scratch)?;
+        if let Some(bytes) = cache.as_ref() {
+            if bytes.len() < config.local_cache_bytes(image.width)? {
+                return Err(Error::ScratchTooSmall);
+            }
+        }
         let previous = match self.state {
             TrackerState::Candidate { hint, .. } | TrackerState::Tracking { hint }
                 if hint.image_width != image.width || hint.image_height != image.height =>
@@ -1649,6 +1844,7 @@ impl Tracker {
                 stats,
                 &budget,
                 Some(&mut geometry),
+                cache.as_deref_mut(),
             );
             let translate = |mut corners: [Point; 4]| {
                 for p in &mut corners {
@@ -1804,8 +2000,111 @@ fn observation_pattern(bin: Binary<'_>, f: Finder) -> Result<bool, Error> {
 
 #[cfg(all(test, tessipher_repository_fixtures))]
 mod tests {
+    extern crate std;
     use super::*;
 
+    #[test]
+    fn cached_local_matches_sparse_threshold_and_reduces_scan_reads() {
+        for radius in [4, 5, 24, 25, 128] {
+            for (width, height, stride) in [(1, 1, 1), (8, 9, 13), (97, 83, 103)] {
+                for contrast in [5, 255] {
+                    let pixels: std::vec::Vec<u8> = (0..stride * height)
+                        .map(|i| ((i * 17 + i / stride * 31) % (contrast + 1)) as u8)
+                        .collect();
+                    let parent = GrayImage::new(&pixels, width, height, stride).unwrap();
+                    let image = if width > 8 {
+                        parent
+                            .sub_roi(Rect {
+                                x: 3,
+                                y: 2,
+                                width: width - 6,
+                                height: height - 4,
+                            })
+                            .unwrap()
+                    } else {
+                        parent
+                    };
+                    for inverted in [false, true] {
+                        let raw_budget = PixelBudget::new(usize::MAX);
+                        let cached_budget = PixelBudget::new(usize::MAX);
+                        let mut bytes = std::vec![0xaa; 5 * image.width + 7];
+                        {
+                            let cache = RefCell::new(RowCache::new(&mut bytes));
+                            let raw = Binary {
+                                radius,
+                                inverted,
+                                ..test_binary(image, &raw_budget, true)
+                            };
+                            let cached = Binary {
+                                budget: &cached_budget,
+                                cache: Some(&cache),
+                                fill_cache: true,
+                                ..raw
+                            };
+                            for y in 0..image.height {
+                                for x in 0..image.width {
+                                    assert_eq!(raw.dark(x, y), cached.dark(x, y));
+                                }
+                            }
+                            if width > 8 {
+                                assert!(cached_budget.used.get() < raw_budget.used.get());
+                            }
+                        }
+                        assert!(bytes[5 * image.width..].iter().all(|&b| b == 0xaa));
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn irregular_misses_read_directly_without_replacing_scan_rows() {
+        let pixels = [7; 4 * 8];
+        let image = GrayImage::new(&pixels, 4, 8, 4).unwrap();
+        let mut bytes = [0; 20];
+        let mut cache = RowCache::new(&mut bytes);
+        let budget = PixelBudget::new(21);
+        for row in 0..5 {
+            assert_eq!(cache.read(image, &budget, 0, row, true), Ok(7));
+        }
+        let tags = cache.tags;
+        let order = cache.order;
+        assert_eq!(cache.read(image, &budget, 0, 7, false), Ok(7));
+        assert_eq!(budget.used.get(), 21);
+        assert_eq!(cache.tags, tags);
+        assert_eq!(cache.order, order);
+        assert_eq!(cache.read(image, &budget, 3, 0, false), Ok(7));
+        assert_eq!(
+            cache.read(image, &budget, 0, 6, false),
+            Err(Error::PixelBudget)
+        );
+        assert_eq!(cache.tags, tags);
+        assert_eq!(cache.order, order);
+    }
+    #[test]
+    fn incomplete_cached_fill_is_invalid_and_budget_is_exact() {
+        let pixels = [0, 1, 2, 3, 4, 5, 6, 7];
+        let image = GrayImage::new(&pixels, 4, 2, 4).unwrap();
+        let mut bytes = [0xaa; 20];
+        let mut cache = RowCache::new(&mut bytes);
+        for limit in 0..4 {
+            let budget = PixelBudget::new(limit);
+            assert_eq!(
+                cache.read(image, &budget, 0, 0, true),
+                Err(Error::PixelBudget)
+            );
+            assert_eq!(budget.used.get(), limit);
+            assert!(!cache.tags.contains(&Some(0)));
+        }
+        let budget = PixelBudget::new(4);
+        assert_eq!(cache.read(image, &budget, 2, 0, true), Ok(2));
+        assert_eq!(cache.read(image, &budget, 3, 0, true), Ok(3));
+        assert_eq!(budget.used.get(), 4);
+        assert_eq!(
+            cache.read(image, &budget, 0, 1, true),
+            Err(Error::PixelBudget)
+        );
+        assert!(!cache.tags.contains(&Some(1)));
+    }
     #[test]
     fn rejected_geometric_sample_consumes_retry_and_preserves_decode_error() {
         let budget = PixelBudget::new(DEFAULT_MAX_PIXEL_READS);
@@ -1813,6 +2112,8 @@ mod tests {
         let bin = Binary {
             image,
             budget: &budget,
+            cache: None,
+            fill_cache: false,
             threshold: 127,
             inverted: false,
             local: false,
@@ -1848,6 +2149,8 @@ mod tests {
         Binary {
             image,
             budget,
+            cache: None,
+            fill_cache: false,
             threshold: 127,
             inverted: false,
             local,

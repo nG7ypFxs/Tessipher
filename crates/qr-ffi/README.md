@@ -13,12 +13,13 @@ cargo build -p tessipher-ffi --release --locked
 ```
 
 The C header is generated from `abi_schema.rs` and `prototypes.h` during the
-build. Retrieve the feature-matched header from the generated `OUT_DIR` path
-printed by Cargo, normally
-`target/<profile>/build/tessipher-ffi-*/out/tessipher.h`. The repository also
-keeps the default generated header at
-[`include/tessipher.h`](../../include/tessipher.h). Build with `micro-qr` or
-`micro-qr-detect` when the corresponding declarations and symbols are needed.
+build. The default build can use the checked-in
+[`include/tessipher.h`](../../include/tessipher.h). Optional `micro-qr` and
+`micro-qr-detect` builds need the matching header and archive. Ordinary Cargo
+output does not show the generated header path; use Cargo's JSON build messages
+as demonstrated in [exporting a matching header and archive](../../docs/ffi.md#exporting-a-matching-header-and-archive).
+Do not select a header by globbing the build directory: previous feature and
+target builds may leave several different headers there.
 
 See the repository [C integration guide](../../docs/ffi.md) for pointer
 contracts, memory queries, and host or firmware linking. The source and

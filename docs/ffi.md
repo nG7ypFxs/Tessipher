@@ -77,7 +77,8 @@ The default `host` feature of `tessipher-ffi` links std for host staticlib tests
 Use `--no-default-features --release` for firmware.
 The no-host staticlib includes a panic handler that loops indefinitely if a panic occurs and does not unwind into C.
 Linking this rlib alongside another Rust panic handler is not an intended use.
-For direct use from Rust firmware, link `qr` or the individual safe crates instead.
+For direct use from Rust firmware, depend on the `tessipher` package and use its
+`qr` library instead.
 
 The `QR_MAX_WIDTH` and `QR_MAX_HEIGHT` environment variables independently set the C ABI's compile-time image limits, each in 1–32768 and defaulting to 640.
 For example: `QR_MAX_WIDTH=640 QR_MAX_HEIGHT=240 cargo build -p tessipher-ffi --release`.
@@ -110,6 +111,54 @@ types remain declared for layout and shared-schema stability, while functions
 are visible only inside their matching `#if` blocks. `tools/c_micro.py` builds
 all three feature variants in separate target directories, compiles each header
 with its archive, checks exported symbols, and links an old ABI-1 header too.
+
+### Exporting a matching header and archive
+
+Use Cargo's JSON messages to identify the header and static archive produced by
+the same build. Normal `cargo build` output does not print `OUT_DIR`, and a glob
+such as `build/tessipher-ffi-*/out/tessipher.h` can match stale headers from other
+features or targets.
+
+This example exports a host archive with Micro QR matrix and image support into
+`target/ffi-micro-detect`. Run it from the repository root with Python 3.10 or
+later:
+
+```sh
+mkdir -p target/ffi-micro-detect
+cargo build -p tessipher-ffi --release --locked --features micro-qr-detect \
+  --message-format=json > target/ffi-micro-detect/build.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+import shutil
+
+output = Path("target/ffi-micro-detect")
+records = [json.loads(line) for line in (output / "build.json").read_text().splitlines()]
+headers = [Path(record["out_dir"]) / "tessipher.h" for record in records
+           if record["reason"] == "build-script-executed"
+           and "tessipher-ffi" in record["package_id"]]
+archives = [Path(name) for record in records
+            if record["reason"] == "compiler-artifact"
+            and record["target"]["name"] == "qr_ffi"
+            for name in record["filenames"] if name.endswith((".a", ".lib"))]
+if len(headers) != 1 or len(archives) != 1:
+    raise SystemExit("Expected one Tessipher FFI header and one static archive")
+shutil.copy2(headers[0], output / "tessipher.h")
+shutil.copy2(archives[0], output / archives[0].name)
+print(f"Exported {headers[0].name} and {archives[0].name} to {output}")
+PY
+```
+
+Compile consumers with `-Itarget/ffi-micro-detect` and link the archive exported
+there (`libqr_ffi.a` on the documented Unix and Cortex targets). The raw generated
+header is valid C and C++; exporting it does not require clang-format.
+
+For a matrix-only Micro QR archive, change the feature to `micro-qr` and use a
+different export directory. For firmware, also add `--no-default-features` and
+`--target <target-triple>` to the Cargo command after installing that Rust target.
+The JSON identifies the correct paths even when `CARGO_TARGET_DIR` is set. The
+export directory is independent of that setting; update its path in both commands
+when exporting another variant. Keep each header with its matching archive.
 
 ## Choosing an entry point
 

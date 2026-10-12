@@ -13,15 +13,28 @@ code has [separate licenses](THIRD_PARTY.md).
 
 ## Getting started
 
-The Rust package is `tessipher`; the library name is `qr`:
+The Rust package is `tessipher`; the library name is `qr`. The first crates.io
+release has not been published yet. Clone the repository and run the host example:
+
+```sh
+git clone https://github.com/nG7ypFxs/Tessipher.git
+cd Tessipher
+cargo run -p tessipher --example read_pgm --locked -- fixtures/v1.pgm
+```
+
+The example prints `payload bytes: [84, 69, 83, 84]`, the bytes for `TEST`.
+Its small file reader accepts binary PGM (`P5`) with a three-line header,
+maximum value `255`, and no comments; it is not a general image-file loader.
+
+To use the library in another Cargo project beside this checkout, add:
 
 ```toml
 [dependencies]
-qr = { package = "tessipher", version = "0.1.0" }
+qr = { package = "tessipher", path = "../Tessipher/crates/qr" }
 ```
 
-**The first crates.io release has not been published yet.** This snippet is for
-that planned release. Until then, use a repository checkout or a path dependency.
+Adjust the path for your project layout. After the planned first release is
+published, the dependency can use `version = "0.1.0"` instead of `path`.
 
 ## Decode an image in Rust
 
@@ -141,9 +154,10 @@ explains the tradeoffs, including the extra work on long failures.
 Generate the API reference and run the Rust tests with:
 
 ```sh
-cargo doc --workspace --no-deps --locked
+cargo doc --workspace --all-features --no-deps --locked
 cargo test --workspace --locked
 cargo test --workspace --all-features --locked
+uv run tools/check_docs.py
 ```
 
 The test suite includes independently generated matrices and synthetic images

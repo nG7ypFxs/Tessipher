@@ -82,7 +82,9 @@ These cases do not guarantee success under arbitrary anisotropic or perspective 
 The current fixed corpus covers 17°, 45°, and quarter-turn rotations, strong V1 perspective, V7 alignment-based perspective, inverted polarity, lighting gradients, and mild random noise.
 The strong-perspective V1 fixture fails the affine attempt and succeeds through fourth-point search.
 The local-threshold fixture fails global thresholds and succeeds on the third pass.
-Fixture coordinates, lighting formulas, and random seeds are recorded in `tools/generate_fixtures.py` and `crates/qr/tests/images.rs`.
+Fixture coordinates, lighting formulas, and random seeds are recorded in
+[tools/generate_fixtures.py](../tools/generate_fixtures.py) and
+[crates/qr/tests/detect_images.rs](../crates/qr/tests/detect_images.rs).
 
 ## Computational bounds and operational limits
 

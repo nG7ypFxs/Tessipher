@@ -1,0 +1,42 @@
+[package]
+name = "tessipher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "allocation-free, no_std QR decoding for embedded Rust"
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/tessipher"
+readme = "README.md"
+keywords = ["qrcode", "qr-code", "embedded", "no-std", "decoder"]
+categories = ["embedded", "no-std", "algorithms"]
+include = ["src/**", "build.rs", "README.md", "LICENSE-*", "THIRD_PARTY.md"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+name = "qr"
+
+[[example]]
+name = "bench"
+required-features = ["detect"]
+
+[[example]]
+name = "fuzz_smoke"
+required-features = ["detect"]
+
+[[example]]
+name = "read_pgm"
+required-features = ["detect"]
+
+[[example]]
+name = "sampling_bench"
+required-features = ["detect"]
+
+[features]
+default = ["detect"]
+detect = []
+micro-qr = []
+micro-qr-detect = ["detect", "micro-qr"]

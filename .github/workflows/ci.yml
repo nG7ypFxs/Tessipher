@@ -1,0 +1,121 @@
+name: Rust and C verification
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  host:
+    strategy:
+      matrix:
+        rust: [1.85.1, stable]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.10.10"
+          cache-dependency-glob: "tools/*.py"
+      - run: uv run tools/c_format.py --check
+      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo test --workspace --all-features --locked --release
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo doc --workspace --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings -D missing_docs
+      - run: uv run tools/c_smoke.py
+      - run: python3 tools/c_micro.py
+      - run: python3 tools/cross_decode.py
+      - run: cargo run -p tessipher --example fuzz_smoke --release
+      - run: cargo run -p tessipher --example bench --release
+      - run: python3 tools/generate_fixtures.py && git diff --exit-code -- fixtures/
+      - run: python3 -m pip install segno==1.6.6
+      - run: python3 tools/generate_segno_fixtures.py && git diff --exit-code -- fixtures/
+  embedded:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master (formerly stable)
+        with:
+          toolchain: stable
+          targets: thumbv6m-none-eabi, thumbv7em-none-eabi, wasm32-unknown-unknown
+      - run: cargo build -p tessipher --no-default-features --target thumbv6m-none-eabi --release --locked
+      - run: cargo build -p tessipher --no-default-features --features micro-qr --target thumbv6m-none-eabi --release --locked
+      - run: cargo build -p tessipher --features micro-qr-detect --target thumbv6m-none-eabi --release --locked
+      - run: cargo build -p tessipher-ffi --no-default-features --target thumbv7em-none-eabi --release --locked
+      - run: cargo build -p tessipher-ffi --no-default-features --features micro-qr --target thumbv7em-none-eabi --release --locked
+      - run: cargo build -p tessipher-ffi --no-default-features --features micro-qr-detect --target thumbv7em-none-eabi --release --locked
+      - run: python3 tools/check_symbols.py
+      - run: cargo check -p tessipher --target wasm32-unknown-unknown --locked
+      - run: cargo check -p tessipher --features micro-qr-detect --target wasm32-unknown-unknown --locked
+  zephyr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+          targets: thumbv7m-none-eabi
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.10.10"
+          cache-dependency-glob: "tools/*.py"
+      - name: Install pinned Zephyr and ARM SDK
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zephyr-venv"
+          export PATH="$RUNNER_TEMP/zephyr-venv/bin:$PATH"
+          python -m pip install west cmake ninja
+          git clone --depth 1 --branch v4.4.2 https://github.com/zephyrproject-rtos/zephyr.git "$RUNNER_TEMP/zephyr-workspace/zephyr"
+          west init -l "$RUNNER_TEMP/zephyr-workspace/zephyr"
+          (cd "$RUNNER_TEMP/zephyr-workspace" && west update cmsis cmsis_6)
+          python -m pip install \
+            -r "$RUNNER_TEMP/zephyr-workspace/zephyr/scripts/requirements-base.txt" \
+            -r "$RUNNER_TEMP/zephyr-workspace/zephyr/scripts/requirements-build-test.txt" \
+            -r "$RUNNER_TEMP/zephyr-workspace/zephyr/scripts/requirements-run-test.txt"
+          curl -L --fail https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.1/zephyr-sdk-1.0.1_linux-x86_64_minimal.tar.xz -o "$RUNNER_TEMP/zephyr-sdk.tar.xz"
+          echo "ca9bc0ff66fafca1dac9d592a36d953cf16d096a9d09b1c0357f021cf9f6a7eb  $RUNNER_TEMP/zephyr-sdk.tar.xz" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/zephyr-sdk.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/zephyr-sdk-1.0.1/setup.sh" -t arm-zephyr-eabi -h
+      - name: Run Cortex-M3 QEMU tests
+        shell: bash
+        run: |
+          export PATH="$RUNNER_TEMP/zephyr-venv/bin:$PATH"
+          python tools/test_zephyr_smoke.py
+          python tools/zephyr_smoke.py \
+            --zephyr-base "$RUNNER_TEMP/zephyr-workspace/zephyr" \
+            --sdk-dir "$RUNNER_TEMP/zephyr-sdk-1.0.1"
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master (formerly nightly)
+        with:
+          toolchain: nightly
+      - run: cargo install cargo-fuzz --locked
+      - run: python3 tools/fuzz_seeds.py
+      - run: cargo fuzz run payload -- -max_total_time=15
+      - run: cargo fuzz run matrix -- -max_total_time=15
+      - run: cargo fuzz run image -- -max_total_time=15
+
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo doc --workspace --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings -D missing_docs
+      - run: cargo package -p tessipher --locked
+      - run: python3 tools/package_check.py

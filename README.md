@@ -1,4 +1,4 @@
-# Tessipher 0.1
+# Tessipher
 
 Tessipher is a QR reader for embedded systems. It decodes sampled module
 matrices or finds a single symbol in a Gray8 image, with QR Model 2 enabled by

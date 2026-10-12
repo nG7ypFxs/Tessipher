@@ -2,17 +2,51 @@
 
 use qr_ffi::*;
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::cell::Cell;
 
 struct CountingAllocator;
-static COUNTING: AtomicBool = AtomicBool::new(false);
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    // Constant initialization avoids allocations in the allocator's TLS access.
+    // Count only this thread so the test harness cannot affect the measurement.
+    static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+fn count_allocation() {
+    // TLS may be unavailable during thread teardown; allocators must not panic.
+    let _ = ALLOCATIONS.try_with(|count| {
+        if let Some(n) = count.get() {
+            count.set(Some(n.saturating_add(1)));
+        }
+    });
+}
+
+fn start_counting() {
+    ALLOCATIONS.with(|count| {
+        assert!(count.get().is_none());
+        count.set(Some(0));
+    });
+}
+
+fn stop_counting() -> usize {
+    ALLOCATIONS.with(|count| {
+        count
+            .replace(None)
+            .expect("allocation measurement is active")
+    })
+}
+
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        }
+        count_allocation();
         unsafe { System.alloc(layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        count_allocation();
+        unsafe { System.alloc_zeroed(layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        count_allocation();
+        unsafe { System.realloc(ptr, layout, new_size) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         unsafe { System.dealloc(ptr, layout) }
@@ -26,6 +60,56 @@ fn fixture() -> (&'static [u8], usize) {
     let output_len = u16::from_le_bytes([corpus[8], corpus[9]]) as usize;
     let matrix_len = u16::from_le_bytes([corpus[10], corpus[11]]) as usize;
     (&corpus[12 + output_len..12 + output_len + matrix_len], 11)
+}
+
+#[test]
+fn counting_ignores_other_threads() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let ready = AtomicBool::new(false);
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !ready.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+            let layout = Layout::from_size_align(16, 8).unwrap();
+            unsafe {
+                let ptr = std::hint::black_box(ALLOCATOR.alloc(layout));
+                assert!(!ptr.is_null());
+                ALLOCATOR.dealloc(ptr, layout);
+            }
+            done.store(true, Ordering::Release);
+        });
+        // Parking may allocate on the measured thread; spin for synchronization.
+        start_counting();
+        ready.store(true, Ordering::Release);
+        while !done.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
+        assert_eq!(stop_counting(), 0);
+    });
+}
+
+#[test]
+fn counting_detects_allocations_and_resets() {
+    let layout = Layout::from_size_align(16, 8).unwrap();
+    start_counting();
+    // Direct calls keep the allocation operations observable in release builds.
+    unsafe {
+        let ptr = std::hint::black_box(ALLOCATOR.alloc(layout));
+        assert!(!ptr.is_null());
+        let resized = std::hint::black_box(ALLOCATOR.realloc(ptr, layout, 32));
+        assert!(!resized.is_null());
+        ALLOCATOR.dealloc(resized, Layout::from_size_align(32, 8).unwrap());
+        let zeroed = std::hint::black_box(ALLOCATOR.alloc_zeroed(layout));
+        assert!(!zeroed.is_null());
+        ALLOCATOR.dealloc(zeroed, layout);
+    }
+    assert_eq!(stop_counting(), 3);
+
+    start_counting();
+    assert_eq!(stop_counting(), 0);
 }
 
 #[test]
@@ -56,8 +140,7 @@ fn micro_c_matrix_and_image_calls_do_not_allocate() {
         }
     }
 
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-    COUNTING.store(true, Ordering::Relaxed);
+    start_counting();
     let matrix_status = unsafe {
         qr_decode_micro_matrix(
             bits.as_ptr(),
@@ -91,9 +174,9 @@ fn micro_c_matrix_and_image_calls_do_not_allocate() {
             &mut result,
         )
     };
-    COUNTING.store(false, Ordering::Relaxed);
+    let allocations = stop_counting();
 
     assert_eq!(matrix_status, 0);
     assert_eq!(image_status, 0);
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(allocations, 0);
 }

@@ -1,0 +1,29 @@
+[package]
+name = "tessipher-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+[package.metadata]
+cargo-fuzz = true
+[dependencies]
+libfuzzer-sys = "0.4"
+qr = { package = "tessipher", version = "0.1.0", path = "../crates/qr" }
+[workspace]
+[[bin]]
+name = "matrix"
+path = "fuzz_targets/matrix.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "payload"
+path = "fuzz_targets/payload.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+bench = false

@@ -155,7 +155,6 @@ help isolated center damage, but does not guarantee improvement for blur, very
 small modules, strong projection, or missed/decorated finder patterns. Extra
 fallback work can leave fewer geometries available under the same work budget.
 
-
 The sampling choice remains explicit in Rust and in the C tracker API. Existing
 stateless C Gray8 APIs use center-then-majority-five by default, following the
 paired gate in [performance evaluation](sampling-performance.md). Explicit Center

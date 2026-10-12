@@ -231,7 +231,6 @@ including when the saved ROI is smaller. `Detection::stats` equals the supplied
 stats on success; failure stats still include all completed and partial reads.
 The C API now exposes explicit sampling and integer caller-owned tracking; see [C ABI](ffi.md).
 
-
 `Tracker::from_state(state)` safely restores saved Rust enum state. Candidate
 misses must be exactly one; image dimensions must be in 1..=32768, and the
 nonempty integer rectangle must fit those saved dimensions without arithmetic

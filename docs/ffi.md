@@ -373,7 +373,6 @@ start delay, borrowed luma-plane input, and paired stateless/tracker strategies,
 see [the macOS camera benchmark](mac-camera-benchmark.md). Its status success
 fraction is not a recognition-accuracy measurement.
 
-
 ## Sampling default, explicit counters, and tracking
 
 `qr_decode_gray` and `qr_decode_gray_with_budget` default to

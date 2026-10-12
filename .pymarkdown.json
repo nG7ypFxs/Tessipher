@@ -1,0 +1,22 @@
+{
+  "plugins": {
+    "selectively_enable_rules": true,
+    "MD001": {"enabled": true},
+    "MD009": {"enabled": true},
+    "MD010": {"enabled": true},
+    "MD012": {"enabled": true},
+    "MD018": {"enabled": true},
+    "MD019": {"enabled": true},
+    "MD020": {"enabled": true},
+    "MD021": {"enabled": true},
+    "MD022": {"enabled": true},
+    "MD023": {"enabled": true},
+    "MD031": {"enabled": true},
+    "MD032": {"enabled": true},
+    "MD037": {"enabled": true},
+    "MD038": {"enabled": true},
+    "MD039": {"enabled": true},
+    "MD040": {"enabled": true},
+    "MD047": {"enabled": true}
+  }
+}

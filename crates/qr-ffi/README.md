@@ -23,4 +23,3 @@ keeps the default generated header at
 See the repository [C integration guide](../../docs/ffi.md) for pointer
 contracts, memory queries, and host or firmware linking. The source and
 generated header remain covered by the repository's MIT OR Apache-2.0 license.
-

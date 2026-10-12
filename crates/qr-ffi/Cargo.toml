@@ -1,0 +1,24 @@
+[package]
+name = "tessipher-ffi"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "repository-only C ABI for the Tessipher embedded QR decoder"
+homepage.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[lib]
+name = "qr_ffi"
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = ["host"]
+host = []
+micro-qr = ["qr/micro-qr"]
+micro-qr-detect = ["micro-qr", "qr/micro-qr-detect"]
+
+[dependencies]
+qr = { package = "tessipher", version = "0.1.0", path = "../qr" }

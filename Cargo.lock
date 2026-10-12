@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "tessipher"
 version = "0.1.0"
+
+[[package]]
+name = "tessipher-ffi"
+version = "0.1.0"
+dependencies = [
+ "tessipher",
+]

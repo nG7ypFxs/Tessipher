@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/qr"]
+members = ["crates/qr", "crates/qr-ffi"]
 resolver = "2"
 
 [workspace.package]

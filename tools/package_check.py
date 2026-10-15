@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -16,9 +20,17 @@ except ModuleNotFoundError:  # Python 3.10
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_DIR = ROOT / "target" / "package"
-ARCHIVE_NAME = "tessipher-0.1.0.crate"
-ARCHIVE_ROOT = "tessipher-0.1.0"
+
+
+def package_archive() -> Path:
+    metadata = json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--no-deps", "--format-version=1", "--locked"],
+        cwd=ROOT,
+    ))
+    package = next(package for package in metadata["packages"]
+                   if package["name"] == "tessipher")
+    return (Path(metadata["target_directory"]) / "package" /
+            f"tessipher-{package['version']}.crate")
 
 
 def fail(message: str) -> None:
@@ -50,7 +62,7 @@ def check_manifest(archive: Path, text: str) -> None:
 def extract(archive: Path, staging: Path) -> Path:
     with tarfile.open(archive) as package:
         names = package.getnames()
-        expected_root = ARCHIVE_ROOT + "/"
+        expected_root = archive.stem + "/"
         if any(
             PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts
             for name in names
@@ -88,11 +100,31 @@ def extract(archive: Path, staging: Path) -> Path:
         if "Project Nayuki QR Code generator (MIT)" not in notice:
             fail(f"{archive.name} omits the Nayuki MIT notice")
         package.extractall(staging)
-    return staging / ARCHIVE_ROOT / "Cargo.toml"
+    return staging / archive.stem / "Cargo.toml"
 
 
-def main() -> None:
-    archive = PACKAGE_DIR / ARCHIVE_NAME
+def stage_assets(archive: Path, output: Path) -> None:
+    # A fresh directory prevents unrelated or stale assets entering a release.
+    output.mkdir(parents=True, exist_ok=False)
+    destination = output / archive.name
+    shutil.copyfile(archive, destination)
+    checksum = hashlib.sha256(destination.read_bytes()).hexdigest()
+    (output / "SHA256SUMS").write_text(f"{checksum}  {archive.name}\n", encoding="utf-8")
+
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--release-tag", help="require v<package version> before staging")
+    parser.add_argument("--output-dir", type=Path, help="stage verified release assets")
+    args = parser.parse_args(argv)
+    if bool(args.release_tag) != bool(args.output_dir):
+        parser.error("--release-tag and --output-dir must be supplied together")
+
+    archive = package_archive()
+    if args.release_tag is not None:
+        version = archive.stem.removeprefix("tessipher-")
+        if args.release_tag != f"v{version}":
+            fail(f"Release tag {args.release_tag!r} must match package version v{version}")
     if not archive.is_file():
         fail(
             "Missing package archive; run "
@@ -115,6 +147,8 @@ def main() -> None:
             cwd=manifest.parent,
             check=True,
         )
+    if args.output_dir is not None:
+        stage_assets(archive, args.output_dir)
     print(
         "tessipher archive contains its manifest, README, licenses, Nayuki notice, "
         "build script, and self-contained runtime sources"

@@ -17,6 +17,7 @@ cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+python3 -m unittest discover -s tools -p test_package_check.py
 uv run tools/check_docs.py --test
 uv run tools/check_docs.py
 uv run tools/c_format.py --check

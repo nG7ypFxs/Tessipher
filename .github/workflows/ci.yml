@@ -7,6 +7,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Generate changelog preview
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          version: v2.14.2
+          args: --offline --use-branch-tags
+        env:
+          OUTPUT: target/changelog/CHANGELOG.md
+      - name: Test changelog generation
+        run: python3 -m unittest discover -s tools -p test_changelog.py
+        env:
+          GIT_CLIFF: ${{ runner.temp }}/git-cliff/bin/git-cliff
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.10.10"
@@ -117,11 +130,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
           toolchain: stable
           components: rustfmt, clippy
       - run: python3 -m unittest discover -s tools -p test_package_check.py
+      - name: Generate release changelog
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          version: v2.14.2
+          args: --offline --use-branch-tags
+        env:
+          OUTPUT: target/changelog/CHANGELOG.md
+      - name: Generate release notes
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          version: v2.14.2
+          args: --offline --use-branch-tags --current --strip header
+        env:
+          OUTPUT: target/changelog/RELEASE_NOTES.md
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --all-features --locked
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -140,6 +171,11 @@ jobs:
             args+=(--release-tag "$RELEASE_TAG" --output-dir target/release-assets)
           fi
           python3 tools/package_check.py "${args[@]}"
+          if [[ "$IS_RELEASE" == true ]]; then
+            cp target/changelog/CHANGELOG.md target/changelog/RELEASE_NOTES.md target/release-assets/
+            cd target/release-assets
+            sha256sum -- *.crate CHANGELOG.md > SHA256SUMS
+          fi
       - name: Upload verified release assets
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -177,5 +213,5 @@ jobs:
           if [[ "${RELEASE_TAG%%+*}" == *-* ]]; then
             flags+=(--prerelease --latest=false)
           fi
-          gh release create "$RELEASE_TAG" ./*.crate SHA256SUMS \
-            --verify-tag --generate-notes --title "Tessipher $RELEASE_TAG" "${flags[@]}"
+          gh release create "$RELEASE_TAG" ./*.crate CHANGELOG.md SHA256SUMS \
+            --verify-tag --notes-file RELEASE_NOTES.md --title "Tessipher $RELEASE_TAG" "${flags[@]}"

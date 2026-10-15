@@ -55,9 +55,11 @@ macros and exported symbols consistent with each Cargo feature set; see
 
 ## Performance and releases
 
+- [Changelog generation](release.md#changelog): generate release history from
+  Conventional Commits when a release tag is pushed.
 - [Sampling and tracking benchmarks](sampling-performance.md): reproduce paired
   measurements and interpret their checks.
 - [macOS camera benchmark](mac-camera-benchmark.md): measure live-camera decoder
   latency and inspect the JSON report.
-- [Release preparation](release.md): prepare versions, verify the package, and
-  create a signed release tag.
+- [GitHub Releases](release.md): prepare versions and publish through a release
+  tag and GitHub Actions.

@@ -151,6 +151,8 @@ explains budget consumption and the extra work on long failures.
 
 ## Documentation
 
+The [GitHub Releases](https://github.com/nG7ypFxs/Tessipher/releases) include
+release notes and a generated `CHANGELOG.md` grouped from Conventional Commits.
 The [user guides](docs/README.md) cover Rust APIs and memory, image detection
 and tuning, C integration, and the Zephyr/QEMU example.
 Generate the complete Rust API reference with:

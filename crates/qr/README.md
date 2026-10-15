@@ -36,7 +36,7 @@ cargo doc -p tessipher --all-features --no-deps --locked --open
 
 The [docs.rs API documentation](https://docs.rs/tessipher) will be available after
 publication. See the [Tessipher repository](https://github.com/nG7ypFxs/Tessipher)
-for the image example, memory requirements, validation record, and feature details.
+for the image example, memory requirements, integration guides, and feature details.
 The bundled [third-party notices](THIRD_PARTY.md) include the MIT permission notice
 for the Nayuki-derived ECC and block tables.
 

@@ -1,5 +1,10 @@
 # Memory and decoding APIs
 
+This guide covers caller-owned storage, input views, results, errors, and
+optional sampling and tracking. See [getting started](../README.md#getting-started)
+for installation and feature selection, and [image detection and tuning](detection.md)
+for search configuration and recognition limits.
+
 ## Ownership and sizes
 
 The public Rust crate uses `#![forbid(unsafe_code)]`.
@@ -157,8 +162,9 @@ The same storage can be reused for each attempt.
 `decode_with_stats` returns scan and budget counters even on failure.
 `Stats.pixel_reads` includes initial min/max and repeated input reads, never exceeds `max_pixel_reads`, and is zero on validation failure.
 Low-contrast input still consumes min/max reads.
-Adding `Config.max_pixel_reads`, `Stats.pixel_reads`, and `Error::PixelBudget` requires external Rust struct literals and exhaustive error matches to be updated; `..Default::default()` can initialize the new fields.
-The C ABI struct layouts remain unchanged; an added entry point accepts the explicit pixel limit.
+Use `Config::default()` or `..Default::default()` to initialize default budgets.
+The C ABI accepts an explicit pixel limit through separate budget and sampling
+entry points; see [C integration](ffi.md).
 
 | Core error | Stage |
 | --- | --- |
@@ -176,15 +182,15 @@ RS checks locator degree, root count, and post-correction syndromes.
 It adopts the recommended miscorrection reserve p from section 7.5.1 of JIS X 0510:2026 (ISO/IEC 18004:2024), accepting only correction counts t that satisfy `2t <= ECC codewords - p` in each block.
 Erasure correction is not implemented.
 
-| Version/ECC | p | Change in allowed correction count |
+| Version/ECC | p | Accepted corrections per block |
 | --- | ---: | --- |
-| V1-L | 3 | From 3 to 2 codewords |
-| V1-M, V2-L | 2 | From 5 to 4 codewords |
-| V1-Q, V1-H, V3-L | 1 | Unchanged: 6, 8, and 7 codewords, respectively |
-| Other combinations | 0 | Unchanged |
+| V1-L | 3 | 2 codewords |
+| V1-M, V2-L | 2 | 4 codewords |
+| V1-Q, V1-H, V3-L | 1 | 6, 8, and 7 codewords, respectively |
+| Other combinations | 0 | Half the ECC codewords, rounded down |
 
 Syndrome calculation and post-correction checks use all ECC codewords.
-Adopting this recommendation rejects three-codeword corruption in V1-L and five-codeword corruption in V1-M/V2-L that previously succeeded.
+The reserve rejects three-codeword corruption in V1-L and five-codeword corruption in V1-M/V2-L.
 Damage beyond correction capacity can produce another valid codeword; excessive corruption is not guaranteed to be detected.
 Within each orientation, BCH decoding rejects two copies that indicate different valid values at the same minimum distance.
 Even when normal orientation fails with this conflict, a successful transpose decode is returned as success.
@@ -193,7 +199,7 @@ Even when normal orientation fails with this conflict, a successful transpose de
 
 `qr::detect::decode_with_sampling(image, config, strategy, scratch, core_scratch,
 output, segments, stats)` is also exported as `qr::decode_gray_with_sampling`.
-`SamplingStrategy::Center` preserves the legacy path. `CenterThenMajority5`
+`SamplingStrategy::Center` samples at each module center. `CenterThenMajority5`
 retries only after a complete center matrix sample fails core content decoding;
 input, capacity, budget, or invalid-projection failures return without fallback.
 The fallback consumes one additional `max_retries` attempt. A core transpose
@@ -229,7 +235,7 @@ is an alias of `Stats`; its `passes` may reach eight for a ROI plus full search.
 All `Config` limits and scratch requirements apply to the complete input image,
 including when the saved ROI is smaller. `Detection::stats` equals the supplied
 stats on success; failure stats still include all completed and partial reads.
-The C API now exposes explicit sampling and integer caller-owned tracking; see [C ABI](ffi.md).
+The C API exposes explicit sampling and integer caller-owned tracking; see [C ABI](ffi.md).
 
 `Tracker::from_state(state)` safely restores saved Rust enum state. Candidate
 misses must be exactly one; image dimensions must be in 1..=32768, and the
@@ -238,12 +244,13 @@ overflow. Its validation uses saved dimensions, independently of the next frame.
 The C representation validates the same geometry and additionally requires saved
 dimensions to fit the linked C library's compiled maxima.
 
-Rust `decode` / `decode_with_stats` remain `Center`. C `qr_decode_gray` /
-`qr_decode_gray_with_budget` now select `CenterThenMajority5`, and the generated
+Rust `decode` / `decode_with_stats` default to `Center`. C `qr_decode_gray` /
+`qr_decode_gray_with_budget` default to `CenterThenMajority5`, and the generated
 header names that choice as `QR_DEFAULT_SAMPLING_STRATEGY`. Explicit C sampling
 uses fixed integer selectors 0 and 1; unknown selectors return `QR_INVALID_CONFIG`.
-This preserves binary layout and symbols but changes behavior on failed center
-attempts, including retry/pixel consumption and which candidate is examined next.
+After a failed center attempt, five-point fallback consumes additional retries
+and pixel reads and can change which candidate is examined next under a finite
+budget.
 
 ## Optional Model 2 local cache
 
@@ -253,6 +260,6 @@ cache argument to `decode_gray_with_sampling`; `Tracker::decode_with_stats_cache
 likewise adds the cache to the tracked method. Query capacity using
 `config.local_cache_bytes(image.width())?` and place this separate buffer in
 internal RAM. Existing APIs and scratch sizes are unchanged.
-See [row-cache behavior, budgets and measurements](detection.md#optional-internal-ram-local-row-cache).
+See [row-cache behavior and budgets](detection.md#optional-internal-ram-local-row-cache).
 
 Model 2 matrix decoding can allocate `qr::core::scratch_bytes(version)?` bytes (460 for V1, 7077 for V40). This const query rejects versions outside 1–40 with `Error::Version`. Image detection and tracking need the full `SCRATCH_BYTES` allocation because the version is unknown. Micro QR matrix and image decoding both need 184 core bytes.

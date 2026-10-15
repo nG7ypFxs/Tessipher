@@ -1,4 +1,8 @@
-# Gray8 detection search envelope
+# Image detection and tuning
+
+Use this guide to choose search budgets and sampling, configure tracking and
+row caching, and understand recognition limits. For input storage and result
+contracts, see [Rust APIs and memory](api.md) or [C integration](ffi.md).
 
 ## Priority and budgets
 
@@ -36,8 +40,8 @@ The next read after the limit returns `PixelBudget` immediately, regardless of r
 Low-contrast images consume their min/max reads even though the other counters remain zero.
 A decode that completes at exactly the limit remains successful.
 The finite default is independent of configured image maxima; callers with larger or harder images can choose a different finite limit.
-Measured corpus/benchmark work was 934,433 reads for normal 640×640 V7, 7,964,308 for the 360×360 lighting fixture, and 30,084,436 for the 640×640 undecodable symbol over four passes.
-64,000,000 leaves more than twice the largest of these measurements; this is an operational default, not a recognition guarantee.
+Choose a limit using observed read counts and timing on the application's workload;
+the default does not guarantee recognition.
 `Stats.retries` and `max_retries` count matrix-sampling attempts, including samples abandoned for invalid geometry.
 A core transpose retry using the same sampled matrix does not consume another sampling attempt.
 The first successfully decoded symbol is returned.
@@ -79,12 +83,6 @@ The public result has no mirrored flag.
 Success across all rotation angles or perspective distortions is not guaranteed.
 The default configuration has also been tested on rectangular images rendering the same V7 matrix at 4×4, 2×4, and 4×2 pixels per module.
 These cases do not guarantee success under arbitrary anisotropic or perspective deformation.
-The current fixed corpus covers 17°, 45°, and quarter-turn rotations, strong V1 perspective, V7 alignment-based perspective, inverted polarity, lighting gradients, and mild random noise.
-The strong-perspective V1 fixture fails the affine attempt and succeeds through fourth-point search.
-The local-threshold fixture fails global thresholds and succeeds on the third pass.
-Fixture coordinates, lighting formulas, and random seeds are recorded in
-[tools/generate_fixtures.py](../tools/generate_fixtures.py) and
-[crates/qr/tests/detect_images.rs](../crates/qr/tests/detect_images.rs).
 
 ## Computational bounds and operational limits
 
@@ -157,12 +155,13 @@ help isolated center damage, but does not guarantee improvement for blur, very
 small modules, strong projection, or missed/decorated finder patterns. Extra
 fallback work can leave fewer geometries available under the same work budget.
 
-The sampling choice remains explicit in Rust and in the C tracker API. Existing
-stateless C Gray8 APIs use center-then-majority-five by default, following the
-paired gate in [performance evaluation](sampling-performance.md). Explicit Center
-is available for callers prioritizing long-failure latency or an older tight-budget
-contract. Small `max_retries` or `max_pixel_reads` values may leave fewer candidate
-projections under the new default, even when ABI-1 struct layouts are unchanged.
+The sampling choice remains explicit in Rust and in the C tracker API.
+Stateless C Gray8 APIs use center-then-majority-five by default. Explicit Center
+is available for callers prioritizing long-failure latency. Small `max_retries`
+or `max_pixel_reads` values may leave fewer candidate projections with five-point
+fallback than with Center. The development
+[benchmark guide](../development/sampling-performance.md) explains how to compare
+sampling and tracking costs for a workload.
 
 ## Optional internal-RAM local row cache
 
@@ -196,9 +195,3 @@ the same success/failure as an uncached call. Sufficient-budget recognition and
 all non-read counters remain identical. Tiny or short scans may cost more due to
 prefetch; there is no universal read reduction or Cortex-M7 speed guarantee.
 The counter measures source accesses, not physical SDRAM transactions or bytes.
-
-Fixture evidence (center sampling, unlimited test budget): `lighting-v2.pgm`
-normal polarity succeeds locally with 7,964,308 input reads uncached versus
-4,619,163 cached (42.0% fewer); its inverted version uses 14,600,860 versus
-7,972,845 (45.4% fewer). A nonuniform 97×83 no-finder image that enters both local
-passes uses 502,295 versus 141,189 (71.9% fewer). Hardware timing is not included.

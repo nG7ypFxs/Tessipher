@@ -68,7 +68,6 @@ release metadata. QEMU 10.0.2 and GNU ARM GCC 14.3.0 are included in this SDK.
 From the Tessipher repository root, with the virtual environment active:
 
 ```sh
-python tools/test_zephyr_smoke.py
 python tools/zephyr_smoke.py
 ```
 
@@ -110,7 +109,6 @@ timeout is a failure. Twister's suite timeout is 120 seconds; the runner also
 limits each child command to 900 seconds and kills its process group on timeout.
 A Rust panic uses the no-host infinite-loop handler and cannot satisfy this
 success condition. Faults or stuck decoding likewise fail or time out.
-`tools/test_zephyr_smoke.py` checks failure detection without needing Zephyr.
 
 ## What is exercised
 
@@ -129,19 +127,7 @@ The three cases check:
   four-module quiet zone: the same payload/metadata and nonzero detector work.
 - A one-read pixel budget: `QR_PIXEL_BUDGET` and byte-for-byte unchanged result.
 
-On 2026-10-08, macOS ARM64, Rust 1.99.0, Zephyr v4.4.2, and SDK 1.0.1 passed all
-three cases on QEMU, with zero failed, skipped, or build-only cases. The linked
-ELF reports ARMv7-M/Thumb-2 attributes without VFP-register calling conventions;
-`arm-zephyr-eabi-nm -u` reports no unresolved symbols. The map resolves ARM EABI
-memory/soft-float helpers through libgcc, Rust compiler builtins, and Zephyr's
-minimal libc without duplicate-symbol errors. Twister reports 82,813 bytes ROM
-and 49,698 bytes RAM for the whole ztest image, including its framework, static
-image, and stacks. These are integration-image sizes, not decoder-only sizes.
-
-This verifies execution under Zephyr's scheduler and target ABI, including the
-Gray8 software-float path. QEMU timing is not an MCU cycle measurement. Physical
-board behavior, camera success rates, interrupt/DMA ownership, stack watermarks,
-and worst-case execution time still require hardware-specific testing.
-
-The [CI workflow](../.github/workflows/ci.yml) runs this single board with the same
-pinned Zephyr and SDK versions; its Linux run will be confirmed by CI.
+QEMU execution checks the scheduler and target ABI, including the Gray8
+software-float path; it does not establish MCU timing or board behavior. Validate
+board behavior and interrupt/DMA ownership, and measure stack usage and execution
+time on the target hardware.

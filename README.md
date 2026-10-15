@@ -146,27 +146,21 @@ C Gray8 calls default to center-then-majority-five sampling. Select
 `QR_SAMPLING_CENTER` with `qr_decode_gray_with_sampling` when preserving center
 sampling or working with tight retry/read budgets. C tracking is explicit,
 through `qr_tracker_init` and `qr_tracker_decode_gray`. Sampling and tracking
-preserve existing ABI-1 layouts. The [performance record](docs/sampling-performance.md)
-explains the tradeoffs, including the extra work on long failures.
+preserve existing ABI-1 layouts. The [sampling guide](docs/ffi.md#sampling-default-explicit-counters-and-tracking)
+explains budget consumption and the extra work on long failures.
 
-## Documentation and validation
+## Documentation
 
-Generate the API reference and run the Rust tests with:
+The [user guides](docs/README.md) cover Rust APIs and memory, image detection
+and tuning, C integration, and the Zephyr/QEMU example.
+Generate the complete Rust API reference with:
 
 ```sh
 cargo doc --workspace --all-features --no-deps --locked
-cargo test --workspace --locked
-cargo test --workspace --all-features --locked
-uv run tools/check_docs.py
 ```
 
-The test suite includes independently generated matrices and synthetic images
-covering rotation, mirrors, perspective, inversion, and lighting gradients.
-[The validation record](docs/validation.md) lists completed checks and remaining
-limits. [C integration](docs/ffi.md) covers header and formatting checks using
-[uv](https://docs.astral.sh/uv/getting-started/installation/), which installs the
-pinned formatter automatically. [The release procedure](docs/release.md) covers
-archive checks, SSH-signed tags, and the separate manual publication step.
+Contributor checks, benchmark usage, and release
+procedures are in [development documentation](development/README.md).
 
 The standards reviewed for this project are ISO/IEC 18004:2024 and
 JIS X 0510:2026. It has not undergone certification testing against the entire

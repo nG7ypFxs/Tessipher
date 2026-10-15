@@ -2,21 +2,11 @@
 
 ## Building and headers
 
-Use [uv](https://docs.astral.sh/uv/getting-started/installation/) for header validation
-and host C smoke tests. The scripts declare clang-format 20.1.8 as an inline
-dependency, so `uv run` installs it automatically without manual venv/pip setup:
-
-```sh
-uv run tools/c_format.py --check
-# Apply formatting when editing C sources or headers:
-uv run tools/c_format.py --write
-```
-
-The root `.clang-format` uses four spaces and a 100-column limit while preserving
-include order and wrapping long comments. The formatter includes tracked and untracked
-nonignored `.c` and `.h` files, excluding vendor and build directories.
-Set `CLANG_FORMAT` to a specific executable if needed; its version must match
-the pin. CI uses uv with the same inline dependencies for host and Zephyr checks.
+Build the repository-only `tessipher-ffi` crate with Rust/Cargo. Ordinary builds
+generate a matching C header without requiring clang-format. Optional header
+validation and host smoke tests use
+[uv](https://docs.astral.sh/uv/getting-started/installation/), which installs
+their pinned formatter automatically.
 
 ```sh
 # Static library for host C tests
@@ -85,16 +75,10 @@ For example: `QR_MAX_WIDTH=640 QR_MAX_HEIGHT=240 cargo build -p tessipher-ffi --
 The header does not hard-code dimensions; `qr_memory` returns the limits of the library actually linked.
 The C ABI version is 1, and the maximum module-matrix side is 177.
 
-ABI structs and their field documentation are shared in `crates/qr-ffi/abi_schema.rs`, which generates both Rust types and C declarations for the `tessipher-ffi` package.
-`build.rs` emits a raw `tessipher.h` into OUT_DIR without invoking clang-format;
-ordinary Cargo builds do not need the formatter.
-`tools/check_header.py` formats that raw header using the root configuration before
-comparing it byte-for-byte with the distributed `include/tessipher.h`.
-For the default feature set, the raw and distributed headers have the same declarations;
-their whitespace differs before formatting. Optional-feature headers change only the
-feature macro values, which expose the matching guarded declarations.
-After intentional changes to the schema or header documentation, update the bundled copy with `uv run tools/check_header.py --write`.
-C declarations and an executable check are demonstrated in `examples/c_smoke.c`.
+For the default feature set, the generated and distributed headers have the same
+declarations; their whitespace differs before formatting. Optional-feature
+headers change the feature macro values, which expose the matching guarded
+declarations.
 
 Micro QR declarations and symbols follow the `tessipher-ffi` Cargo features. Every
 generated header defines `QR_HAS_MICRO_QR` and `QR_HAS_MICRO_QR_DETECT` as 0 or
@@ -108,9 +92,7 @@ For an optional-feature archive, use its `OUT_DIR/tessipher.h`, or define the
 same 0/1 macro values before including the distributed header. Header macros and
 the linked archive must come from the same Cargo feature set. The additive Micro
 types remain declared for layout and shared-schema stability, while functions
-are visible only inside their matching `#if` blocks. `tools/c_micro.py` builds
-all three feature variants in separate target directories, compiles each header
-with its archive, checks exported symbols, and links an old ABI-1 header too.
+are visible only inside their matching `#if` blocks.
 
 ### Exporting a matching header and archive
 
@@ -419,7 +401,7 @@ The board supplies `board_cycles` and `board_record`; the caller also manages th
 Cycle counts on a physical board, stack watermarks, and success rates on camera input have not been measured.
 For a reproducible macOS live-camera timing harness with a preview, explicit
 start delay, borrowed luma-plane input, and paired stateless/tracker strategies,
-see [the macOS camera benchmark](mac-camera-benchmark.md). Its status success
+see [the development macOS camera benchmark](../development/mac-camera-benchmark.md). Its status success
 fraction is not a recognition-accuracy measurement.
 
 ## Sampling default, explicit counters, and tracking
@@ -483,14 +465,13 @@ the saved hint for searching, but are not invalid saved state. Stride changes
 retain coordinates; same-size crop origin or scale changes require
 `qr_tracker_reset`. Corners always refer to the complete supplied input image.
 
-`examples/c_tracking.c` checks pointer/state/lifecycle/budget contracts, and
-`python3 tools/c_sampling_bench.py` measures paired calls including FFI byte and
-segment initialization with small and conservative maximum capacities. Its
-one-pixel `NotFound` case isolates a practical initialization floor, including
-validation and one min/max read, rather than measuring buffer clearing alone.
-Both benchmark allocation/input generation and output printing are outside timing.
-See [performance evaluation](sampling-performance.md) for the measured failure
-cost and the limitations of host results.
+FFI calls initialize caller-provided byte and segment buffers, so unnecessarily
+large output capacities can add work even on small images or unsuccessful
+recognition attempts. Choose capacities for the application's payload and segment
+needs, and handle capacity errors when inputs exceed them. The development
+[benchmark guide](../development/sampling-performance.md) explains how to compare
+initialization and sampling costs; measure the complete call on
+the target board.
 
 ## Optional local Gray8 row cache
 
@@ -517,4 +498,4 @@ including untouched stats on earlier argument/capacity rejection.
 exclude internal-RAM hits. Prefetch may exhaust a finite budget earlier, so equal
 budgets do not guarantee equal outcomes. This is a source-read optimization;
 physical SDRAM traffic and Cortex-M7 timings need separate hardware measurements.
-See [cache behavior and fixture evidence](detection.md#optional-internal-ram-local-row-cache).
+See [cache behavior and budgets](detection.md#optional-internal-ram-local-row-cache).

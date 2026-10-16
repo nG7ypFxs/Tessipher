@@ -14,9 +14,9 @@ When using the decoder from multiple tasks, give each task separate scratch and 
 
 | Region | Required size | Alignment |
 | --- | ---: | ---: |
-| Model 2 matrix core scratch | `qr::core::scratch_bytes(version)?` bytes (460 for V1, 7077 for V40) | 1 |
-| Model 2 image / Tracker core scratch | `qr::core::SCRATCH_BYTES` = 7077 bytes | 1 |
-| Micro QR matrix / image core scratch | `qr::core::MICRO_SCRATCH_BYTES` = 184 bytes | 1 |
+| Model 2 matrix core scratch | `tessipher::core::scratch_bytes(version)?` bytes (460 for V1, 7077 for V40) | 1 |
+| Model 2 image / Tracker core scratch | `tessipher::core::SCRATCH_BYTES` = 7077 bytes | 1 |
+| Micro QR matrix / image core scratch | `tessipher::core::MICRO_SCRATCH_BYTES` = 184 bytes | 1 |
 | Detector scratch | `3917 + 20 × max_finders` bytes | 1 |
 | Optional Model 2 local cache | `Config::local_cache_bytes(width)` = `5 × width` bytes | 1 |
 | Payload | Up to 7089 bytes; may be smaller for the application | 1 |
@@ -134,14 +134,14 @@ ECI accepts one-, two-, and three-byte representations up to 999999.
 
 ## Parsing corrected codewords
 
-Use `qr::core::parse_payload_info` for corrected data codewords obtained from another demodulator.
+Use `tessipher::core::parse_payload_info` for corrected data codewords obtained from another demodulator.
 Its `PayloadInfo` fields match `Decoded`: `payload_len`, `segment_count`, `fnc1`, and `structured_append`.
 It does not contain matrix version, ECC level, mask, correction counts, or BCH distances.
 Version must be 1–40, and data length must not exceed `MAX_DATA_CODEWORDS`.
 A terminator and zero padding shorter than four bits are accepted; capacity errors and partial output follow the other decoding entry points' contracts.
 
 ```rust
-use qr::core::{parse_payload_info, Segment};
+use tessipher::core::{parse_payload_info, Segment};
 
 let mut output = [0; 1];
 let mut segments = [Segment::EMPTY; 1];
@@ -197,8 +197,8 @@ Even when normal orientation fails with this conflict, a successful transpose de
 
 ## Opt-in sampling and caller-owned tracking
 
-`qr::detect::decode_with_sampling(image, config, strategy, scratch, core_scratch,
-output, segments, stats)` is also exported as `qr::decode_gray_with_sampling`.
+`tessipher::detect::decode_with_sampling(image, config, strategy, scratch, core_scratch,
+output, segments, stats)` is also exported as `tessipher::decode_gray_with_sampling`.
 `SamplingStrategy::Center` samples at each module center. `CenterThenMajority5`
 retries only after a complete center matrix sample fails core content decoding;
 input, capacity, budget, or invalid-projection failures return without fallback.
@@ -211,10 +211,10 @@ It does not copy pixels and needs no padding after the final row. All subregion
 coordinates are relative to the `GrayImage` on which the method is called.
 
 ```rust
-use qr::{Config, GrayImage, SamplingStrategy, Segment, Stats, Tracker};
+use tessipher::{Config, GrayImage, SamplingStrategy, Segment, Stats, Tracker};
 let config = Config::<640, 480>::default();
 let mut detector = vec![0; config.scratch_bytes().unwrap()];
-let mut core = vec![0; qr::core::SCRATCH_BYTES];
+let mut core = vec![0; tessipher::core::SCRATCH_BYTES];
 let mut payload = [0; 128];
 let mut segments = [Segment::EMPTY; 16];
 let mut tracker = Tracker::new(); // Reuse this small value between frames.
@@ -224,7 +224,7 @@ let frame = GrayImage::new(&pixels, 4, 4, 4).unwrap();
 let result = tracker.decode_with_stats(frame, &config,
     SamplingStrategy::CenterThenMajority5, &mut detector, &mut core,
     &mut payload, &mut segments, &mut stats);
-assert_eq!(result, Err(qr::detect::Error::NotFound));
+assert_eq!(result, Err(tessipher::detect::Error::NotFound));
 ```
 
 The example allocates buffers in the caller for convenience; detector and tracker
@@ -262,4 +262,4 @@ likewise adds the cache to the tracked method. Query capacity using
 internal RAM. Existing APIs and scratch sizes are unchanged.
 See [row-cache behavior and budgets](detection.md#optional-internal-ram-local-row-cache).
 
-Model 2 matrix decoding can allocate `qr::core::scratch_bytes(version)?` bytes (460 for V1, 7077 for V40). This const query rejects versions outside 1–40 with `Error::Version`. Image detection and tracking need the full `SCRATCH_BYTES` allocation because the version is unknown. Micro QR matrix and image decoding both need 184 core bytes.
+Model 2 matrix decoding can allocate `tessipher::core::scratch_bytes(version)?` bytes (460 for V1, 7077 for V40). This const query rejects versions outside 1–40 with `Error::Version`. Image detection and tracking need the full `SCRATCH_BYTES` allocation because the version is unknown. Micro QR matrix and image decoding both need 184 core bytes.

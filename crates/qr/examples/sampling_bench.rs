@@ -1,6 +1,6 @@
 //! Paired sampling-policy and tracker benchmark; allocation/loading/printing are untimed.
-use qr::{core, detect::*};
 use std::{hint::black_box, time::Instant};
+use tessipher::{core, detect::*};
 
 #[derive(Clone)]
 struct Frame {

@@ -1,7 +1,7 @@
 #![cfg(all(feature = "detect", feature = "micro-qr-detect"))]
 
-use qr::core::{Segment, MICRO_SCRATCH_BYTES};
-use qr::detect::{decode_micro, decode_micro_with_stats, Config, Error, GrayImage, Stats};
+use tessipher::core::{Segment, MICRO_SCRATCH_BYTES};
+use tessipher::detect::{decode_micro, decode_micro_with_stats, Config, Error, GrayImage, Stats};
 
 fn matrix(version: u8) -> (&'static [u8], usize, &'static [u8]) {
     let corpus = include_bytes!("../../../fixtures/micro-segno.bin");
@@ -104,7 +104,7 @@ fn run_stats(
     config: &Config<256, 256>,
     output: &mut [u8],
     segments: &mut [Segment],
-) -> (Result<qr::detect::MicroDetection, Error>, Stats) {
+) -> (Result<tessipher::detect::MicroDetection, Error>, Stats) {
     let image = GrayImage::new(pixels, width, height, width).unwrap();
     let mut detector = vec![0; config.scratch_bytes().unwrap()];
     let mut core = vec![0; MICRO_SCRATCH_BYTES];
@@ -256,11 +256,14 @@ fn false_positives_and_budgets_are_deterministic() {
     assert_eq!(stats.pixel_reads, reads - 1);
 
     let (result, _) = run_stats(&pixels, width, height, &config, &mut [], &mut segments);
-    assert_eq!(result, Err(Error::Decode(qr::core::Error::OutputTooSmall)));
+    assert_eq!(
+        result,
+        Err(Error::Decode(tessipher::core::Error::OutputTooSmall))
+    );
     let (result, _) = run_stats(&pixels, width, height, &config, &mut output, &mut []);
     assert_eq!(
         result,
-        Err(Error::Decode(qr::core::Error::SegmentsTooSmall))
+        Err(Error::Decode(tessipher::core::Error::SegmentsTooSmall))
     );
 }
 
@@ -279,6 +282,8 @@ fn minimal_core_scratch_is_required() {
             &mut [0; 64],
             &mut [Segment::EMPTY; 8]
         ),
-        Err(qr::detect::Error::Decode(qr::core::Error::ScratchTooSmall))
+        Err(tessipher::detect::Error::Decode(
+            tessipher::core::Error::ScratchTooSmall
+        ))
     ));
 }

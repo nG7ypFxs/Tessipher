@@ -17,8 +17,8 @@ crate-type = ["rlib", "staticlib"]
 [features]
 default = ["host"]
 host = []
-micro-qr = ["qr/micro-qr"]
-micro-qr-detect = ["micro-qr", "qr/micro-qr-detect"]
+micro-qr = ["tessipher/micro-qr"]
+micro-qr-detect = ["micro-qr", "tessipher/micro-qr-detect"]
 
 [dependencies]
-qr = { package = "tessipher", version = "0.1.0", path = "../qr" }
+tessipher = { version = "0.1.0", path = "../qr" }

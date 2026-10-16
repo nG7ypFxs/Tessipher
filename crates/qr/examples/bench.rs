@@ -1,6 +1,6 @@
 //! Host wall-clock distributions. On MCU measure the same call with a cycle counter.
-use qr::{core, detect};
 use std::{hint::black_box, time::Instant};
+use tessipher::{core, detect};
 fn main() {
     let bits = include_bytes!("../../../fixtures/v7.bin");
     let matrix = core::Matrix::new(bits, 45).unwrap();

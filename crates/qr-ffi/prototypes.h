@@ -50,20 +50,21 @@ enum qr_mode {
 /* Status: 0 success; 1 invalid numeric pointer/length/alignment argument;
  * 2 overlapping buffers; 10 invalid image; 11 image too large; 12 invalid config;
  * 13 detector scratch shortage; 14 finder capacity; 15 candidate budget;
- * 16 retry budget; 17 no symbol; 18 pixel-read budget; 101..110 core errors in qr::core::Error
- * order. ECC values: 0=L, 1=M, 2=Q, 3=H. Mode values are QR mode indicator numbers. FNC1: 0=none,
- * 1=first, 2=second. SA index is zero based, total is 1..16. qr_segment.eci is the last ECI number
- * encountered, initially 3, not an active set. ECI control segments retain every assignment in
- * order for caller interpretation. No charset, encryption, or compression transformation is
- * performed. Each nonempty span must lie in one live allocation, aligned for its type. All nonempty
- * spans, including inputs, must be mutually disjoint. Inputs/config are initialized and unchanged
- * for the duration of the call. Pointer contracts: see docs/ffi.md. Scratch/payload/segment/result
- * outputs must be exclusive writable allocations, disjoint from all input and each other. Null is
- * allowed only for zero-length byte/segment spans. Config/result are mandatory. Matrix bits are
- * packed row-major, MSB first, without row padding. Output storage need not be initialized; no
- * concurrent access is permitted. Numeric checks cannot prove allocation size, validity, lifetime,
- * or exclusivity. On error output buffers are unspecified; result is written only on success. Read
- * only result.payload_len bytes and result.segment_count entries on success.
+ * 16 retry budget; 17 no symbol; 18 pixel-read budget; 101..110 core errors in
+ * tessipher::core::Error order. ECC values: 0=L, 1=M, 2=Q, 3=H. Mode values are QR mode indicator
+ * numbers. FNC1: 0=none, 1=first, 2=second. SA index is zero based, total is 1..16. qr_segment.eci
+ * is the last ECI number encountered, initially 3, not an active set. ECI control segments retain
+ * every assignment in order for caller interpretation. No charset, encryption, or compression
+ * transformation is performed. Each nonempty span must lie in one live allocation, aligned for its
+ * type. All nonempty spans, including inputs, must be mutually disjoint. Inputs/config are
+ * initialized and unchanged for the duration of the call. Pointer contracts: see docs/ffi.md.
+ * Scratch/payload/segment/result outputs must be exclusive writable allocations, disjoint from all
+ * input and each other. Null is allowed only for zero-length byte/segment spans. Config/result are
+ * mandatory. Matrix bits are packed row-major, MSB first, without row padding. Output storage need
+ * not be initialized; no concurrent access is permitted. Numeric checks cannot prove allocation
+ * size, validity, lifetime, or exclusivity. On error output buffers are unspecified; result is
+ * written only on success. Read only result.payload_len bytes and result.segment_count entries on
+ * success.
  */
 /* Writes defaults: finders32/candidates4096/retries256/row_step1/local_radius24.
  * Returns QR_OK or QR_INVALID_ARGUMENT. out is mandatory and exclusively writable. */

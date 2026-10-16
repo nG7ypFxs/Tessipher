@@ -1,4 +1,4 @@
-use qr::core::*;
+use tessipher::core::*;
 fn decode_bits(bits: &[u8], side: usize) -> Result<(Decoded, Vec<u8>), Error> {
     let mut scratch = vec![0xa5; scratch_bytes(((side - 17) / 4) as u8)?];
     let mut out = vec![0; MAX_PAYLOAD_BYTES];

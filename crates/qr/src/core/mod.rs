@@ -15,14 +15,14 @@
 //! Enable Cargo feature `micro-qr` for `MicroMatrix` and `decode_micro`.
 //!
 //! ```
-//! use qr::core::{Matrix, MAX_MATRIX_BYTES};
+//! use tessipher::core::{Matrix, MAX_MATRIX_BYTES};
 //! let mut bits = [0; MAX_MATRIX_BYTES];
 //! bits[0] = 0x80; // The module at (0, 0) is dark.
 //! let matrix = Matrix::new(&bits, 21)?;
 //! assert_eq!(matrix.version(), 1);
 //! assert_eq!(matrix.get(0, 0), Some(true));
 //! assert_eq!(matrix.get(1, 0), Some(false));
-//! # Ok::<(), qr::core::Error>(())
+//! # Ok::<(), tessipher::core::Error>(())
 //! ```
 #[cfg(feature = "micro-qr")]
 mod micro;
@@ -295,7 +295,7 @@ fn capacity_error(error: Error) -> bool {
 /// Damage beyond the correction limit is not guaranteed to be detected.
 ///
 /// ```
-/// use qr::core::{decode, Matrix, Segment, SCRATCH_BYTES};
+/// use tessipher::core::{decode, Matrix, Segment, SCRATCH_BYTES};
 /// // Packed V1-H, mask 3, encoding the raw bytes "TEST".
 /// let bits = [
 ///     0xfe, 0x23, 0xfc, 0x11, 0x50, 0x6e, 0x8e, 0xbb,
@@ -313,7 +313,7 @@ fn capacity_error(error: Error) -> bool {
 ///     &mut payload, &mut segments)?;
 /// assert_eq!(&payload[..decoded.payload_len], b"TEST");
 /// assert_eq!(decoded.segment_count, 1);
-/// # Ok::<(), qr::core::Error>(())
+/// # Ok::<(), tessipher::core::Error>(())
 /// ```
 pub fn decode(
     matrix: Matrix<'_>,
@@ -468,13 +468,13 @@ pub fn parse_payload(
 /// are unspecified on error; on success, read only the returned lengths.
 ///
 /// ```
-/// use qr::core::{parse_payload_info, Segment};
+/// use tessipher::core::{parse_payload_info, Segment};
 /// let mut output = [0; 1];
 /// let mut segments = [Segment::EMPTY; 1];
 /// let info = parse_payload_info(&[0x40, 0x14, 0x10], 1, &mut output, &mut segments)?;
 /// assert_eq!(&output[..info.payload_len], b"A");
 /// assert_eq!(info.segment_count, 1);
-/// # Ok::<(), qr::core::Error>(())
+/// # Ok::<(), tessipher::core::Error>(())
 /// ```
 pub fn parse_payload_info(
     data: &[u8],

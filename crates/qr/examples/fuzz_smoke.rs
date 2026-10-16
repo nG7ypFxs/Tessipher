@@ -1,5 +1,5 @@
 //! Deterministic mutation smoke harness; complements the libFuzzer targets under fuzz/.
-use qr::{core, detect};
+use tessipher::{core, detect};
 fn rand(s: &mut u32) -> u32 {
     *s ^= *s << 13;
     *s ^= *s >> 17;

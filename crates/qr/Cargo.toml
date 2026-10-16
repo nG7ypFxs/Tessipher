@@ -16,9 +16,6 @@ include = ["src/**", "build.rs", "README.md", "LICENSE-*", "THIRD_PARTY.md"]
 [package.metadata.docs.rs]
 all-features = true
 
-[lib]
-name = "qr"
-
 [[example]]
 name = "bench"
 required-features = ["detect"]

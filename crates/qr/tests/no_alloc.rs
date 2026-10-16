@@ -111,12 +111,12 @@ fn counting_ignores_other_threads() {
 #[test]
 fn decoding_does_not_allocate() {
     let bits = include_bytes!("../../../fixtures/v1.bin");
-    let m = qr::Matrix::new(bits, 21).unwrap();
-    let mut cs = vec![0; qr::core::SCRATCH_BYTES];
-    let cfg = qr::DefaultConfig::default();
+    let m = tessipher::Matrix::new(bits, 21).unwrap();
+    let mut cs = vec![0; tessipher::core::SCRATCH_BYTES];
+    let cfg = tessipher::DefaultConfig::default();
     let mut ds = vec![0; cfg.scratch_bytes().unwrap()];
     let mut out = [0; 16];
-    let mut seg = [qr::Segment::EMPTY; 8];
+    let mut seg = [tessipher::Segment::EMPTY; 8];
     let pgm = include_bytes!("../../../fixtures/v1.pgm");
     let offset = pgm
         .iter()
@@ -126,7 +126,7 @@ fn decoding_does_not_allocate() {
         .unwrap()
         .0
         + 1;
-    let img = qr::GrayImage::new(&pgm[offset..], 145, 145, 145).unwrap();
+    let img = tessipher::GrayImage::new(&pgm[offset..], 145, 145, 145).unwrap();
     let mut mirrored_bits = [0u8; 56];
     for y in 0..21 {
         for x in 0..21 {
@@ -136,22 +136,22 @@ fn decoding_does_not_allocate() {
             }
         }
     }
-    let mirrored_matrix = qr::Matrix::new(&mirrored_bits, 21).unwrap();
+    let mirrored_matrix = tessipher::Matrix::new(&mirrored_bits, 21).unwrap();
     let mut mirrored_pixels = pgm[offset..].to_vec();
     for row in mirrored_pixels.chunks_exact_mut(145) {
         row.reverse();
     }
-    let mirrored_image = qr::GrayImage::new(&mirrored_pixels, 145, 145, 145).unwrap();
+    let mirrored_image = tessipher::GrayImage::new(&mirrored_pixels, 145, 145, 145).unwrap();
     let mut damaged_pixels = pgm[offset..].to_vec();
     for y in 0..21 {
         for x in 0..21 {
-            if !qr::core::is_function(1, x, y) {
+            if !tessipher::core::is_function(1, x, y) {
                 let i = ((y + 4) * 5 + 2) * 145 + (x + 4) * 5 + 2;
                 damaged_pixels[i] = 255 - damaged_pixels[i];
             }
         }
     }
-    let damaged_image = qr::GrayImage::new(&damaged_pixels, 145, 145, 145).unwrap();
+    let damaged_image = tessipher::GrayImage::new(&damaged_pixels, 145, 145, 145).unwrap();
     let mut stable_pixels = vec![255; 400 * 300];
     let mut moved_pixels = vec![255; 400 * 300];
     for y in 0..145 {
@@ -160,22 +160,22 @@ fn decoding_does_not_allocate() {
         moved_pixels[(y + 140) * 400 + 220..(y + 140) * 400 + 365]
             .copy_from_slice(&pgm[offset + y * 145..offset + (y + 1) * 145]);
     }
-    let stable_image = qr::GrayImage::new(&stable_pixels, 400, 300, 400).unwrap();
-    let moved_image = qr::GrayImage::new(&moved_pixels, 400, 300, 400).unwrap();
+    let stable_image = tessipher::GrayImage::new(&stable_pixels, 400, 300, 400).unwrap();
+    let moved_image = tessipher::GrayImage::new(&moved_pixels, 400, 300, 400).unwrap();
     let blank_pixels = vec![255; 400 * 300];
-    let blank_image = qr::GrayImage::new(&blank_pixels, 400, 300, 400).unwrap();
+    let blank_image = tessipher::GrayImage::new(&blank_pixels, 400, 300, 400).unwrap();
     let mut cache = [0; 5 * 640];
-    let mut tracker = qr::Tracker::new();
-    let mut stats = qr::Stats::default();
+    let mut tracker = tessipher::Tracker::new();
+    let mut stats = tessipher::Stats::default();
     start_counting();
-    let a = qr::decode_matrix(m, &mut cs, &mut out, &mut seg);
-    let b = qr::decode_gray(img, &cfg, &mut ds, &mut cs, &mut out, &mut seg);
-    let c = qr::decode_matrix(mirrored_matrix, &mut cs, &mut out, &mut seg);
-    let d = qr::decode_gray(mirrored_image, &cfg, &mut ds, &mut cs, &mut out, &mut seg);
-    let e = qr::decode_gray_with_sampling(
+    let a = tessipher::decode_matrix(m, &mut cs, &mut out, &mut seg);
+    let b = tessipher::decode_gray(img, &cfg, &mut ds, &mut cs, &mut out, &mut seg);
+    let c = tessipher::decode_matrix(mirrored_matrix, &mut cs, &mut out, &mut seg);
+    let d = tessipher::decode_gray(mirrored_image, &cfg, &mut ds, &mut cs, &mut out, &mut seg);
+    let e = tessipher::decode_gray_with_sampling(
         img,
         &cfg,
-        qr::SamplingStrategy::CenterThenMajority5,
+        tessipher::SamplingStrategy::CenterThenMajority5,
         &mut ds,
         &mut cs,
         &mut out,
@@ -185,7 +185,7 @@ fn decoding_does_not_allocate() {
     let f = tracker.decode_with_stats(
         img,
         &cfg,
-        qr::SamplingStrategy::CenterThenMajority5,
+        tessipher::SamplingStrategy::CenterThenMajority5,
         &mut ds,
         &mut cs,
         &mut out,
@@ -195,17 +195,17 @@ fn decoding_does_not_allocate() {
     let g = tracker.decode_with_stats(
         img,
         &cfg,
-        qr::SamplingStrategy::CenterThenMajority5,
+        tessipher::SamplingStrategy::CenterThenMajority5,
         &mut ds,
         &mut cs,
         &mut out,
         &mut seg,
         &mut stats,
     );
-    let h = qr::decode_gray_with_sampling(
+    let h = tessipher::decode_gray_with_sampling(
         damaged_image,
         &cfg,
-        qr::SamplingStrategy::CenterThenMajority5,
+        tessipher::SamplingStrategy::CenterThenMajority5,
         &mut ds,
         &mut cs,
         &mut out,
@@ -215,18 +215,18 @@ fn decoding_does_not_allocate() {
     let i = tracker.decode_with_stats(
         stable_image,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
         &mut seg,
         &mut stats,
     );
-    tracker = qr::Tracker::from_state(tracker.state()).unwrap();
+    tracker = tessipher::Tracker::from_state(tracker.state()).unwrap();
     let j = tracker.decode_with_stats(
         stable_image,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
@@ -236,7 +236,7 @@ fn decoding_does_not_allocate() {
     let k = tracker.decode_with_stats(
         moved_image,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
@@ -246,7 +246,7 @@ fn decoding_does_not_allocate() {
     let l = tracker.decode_with_stats(
         blank_image,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
@@ -257,17 +257,17 @@ fn decoding_does_not_allocate() {
     let n = tracker.decode_with_stats(
         blank_image,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
         &mut seg,
         &mut stats,
     );
-    let cached = qr::decode_gray_with_sampling_cached(
+    let cached = tessipher::decode_gray_with_sampling_cached(
         img,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
@@ -278,7 +278,7 @@ fn decoding_does_not_allocate() {
     let cached_tracked = tracker.decode_with_stats_cached(
         img,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
@@ -289,7 +289,7 @@ fn decoding_does_not_allocate() {
     let cached_blank = tracker.decode_with_stats_cached(
         blank_image,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
@@ -300,7 +300,7 @@ fn decoding_does_not_allocate() {
     let cached_blank_again = tracker.decode_with_stats_cached(
         blank_image,
         &cfg,
-        qr::SamplingStrategy::Center,
+        tessipher::SamplingStrategy::Center,
         &mut ds,
         &mut cs,
         &mut out,
@@ -320,14 +320,17 @@ fn decoding_does_not_allocate() {
             && h.is_ok()
     );
     assert!(i.is_ok() && j.is_ok() && k.is_ok());
-    assert_eq!(l, Err(qr::detect::Error::NotFound));
-    assert_eq!(n, Err(qr::detect::Error::NotFound));
-    assert!(matches!(candidate, qr::TrackerState::Candidate { .. }));
-    assert_eq!(tracker.state(), qr::TrackerState::Searching);
+    assert_eq!(l, Err(tessipher::detect::Error::NotFound));
+    assert_eq!(n, Err(tessipher::detect::Error::NotFound));
+    assert!(matches!(
+        candidate,
+        tessipher::TrackerState::Candidate { .. }
+    ));
+    assert_eq!(tracker.state(), tessipher::TrackerState::Searching);
     assert_eq!(h.unwrap().stats.retries, 2);
     assert!(cached.is_ok() && cached_tracked.is_ok());
-    assert_eq!(cached_blank, Err(qr::detect::Error::NotFound));
-    assert_eq!(cached_blank_again, Err(qr::detect::Error::NotFound));
+    assert_eq!(cached_blank, Err(tessipher::detect::Error::NotFound));
+    assert_eq!(cached_blank_again, Err(tessipher::detect::Error::NotFound));
     assert_eq!(allocations, 0);
 }
 
@@ -338,12 +341,12 @@ fn micro_decoding_does_not_allocate() {
     let output_len = u16::from_le_bytes([corpus[8], corpus[9]]) as usize;
     let matrix_len = u16::from_le_bytes([corpus[10], corpus[11]]) as usize;
     let bits = &corpus[12 + output_len..12 + output_len + matrix_len];
-    let matrix = qr::MicroMatrix::new(bits, 11).unwrap();
-    let mut core = [0; qr::core::MICRO_SCRATCH_BYTES];
-    let config = qr::Config::<64, 64>::default();
+    let matrix = tessipher::MicroMatrix::new(bits, 11).unwrap();
+    let mut core = [0; tessipher::core::MICRO_SCRATCH_BYTES];
+    let config = tessipher::Config::<64, 64>::default();
     let mut detector = vec![0; config.scratch_bytes().unwrap()];
     let mut output = [0; 35];
-    let mut segments = [qr::Segment::EMPTY; 4];
+    let mut segments = [tessipher::Segment::EMPTY; 4];
     let mut pixels = [255; 60 * 60];
     for y in 0..11 {
         for x in 0..11 {
@@ -357,10 +360,11 @@ fn micro_decoding_does_not_allocate() {
             }
         }
     }
-    let image = qr::GrayImage::new(&pixels, 60, 60, 60).unwrap();
+    let image = tessipher::GrayImage::new(&pixels, 60, 60, 60).unwrap();
     start_counting();
-    let matrix_result = qr::decode_micro_matrix(matrix, &mut core, &mut output, &mut segments);
-    let image_result = qr::decode_micro_gray(
+    let matrix_result =
+        tessipher::decode_micro_matrix(matrix, &mut core, &mut output, &mut segments);
+    let image_result = tessipher::decode_micro_gray(
         image,
         &config,
         &mut detector,

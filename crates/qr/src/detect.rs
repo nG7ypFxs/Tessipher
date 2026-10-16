@@ -8,13 +8,13 @@
 //! Feature `micro-qr-detect` adds separate single-finder `decode_micro` APIs.
 //!
 //! ```
-//! use qr::detect::{Config, GrayImage};
+//! use tessipher::detect::{Config, GrayImage};
 //! let pixels = [255; 8];
 //! let roi = GrayImage::new(&pixels, 2, 2, 6)?;
 //! assert_eq!(roi.pixel(1, 1), Some(255));
 //! let config = Config::<640, 240>::default();
 //! assert_eq!(config.scratch_bytes()?, 4557);
-//! # Ok::<(), qr::detect::Error>(())
+//! # Ok::<(), tessipher::detect::Error>(())
 //! ```
 use crate::core::{Decoded, Matrix, Segment, MAX_MATRIX_BYTES};
 #[cfg(feature = "micro-qr-detect")]
@@ -193,7 +193,7 @@ impl<const W: usize, const H: usize> Config<W, H> {
     pub const MAX_WIDTH: usize = W;
     /// Compile-time maximum ROI height, in pixels.
     pub const MAX_HEIGHT: usize = H;
-    /// Returns `qr::core::MAX_MATRIX_BYTES + 20 * max_finders` after validation.
+    /// Returns `tessipher::core::MAX_MATRIX_BYTES + 20 * max_finders` after validation.
     ///
     /// Returns [`Error::InvalidConfig`] for any invalid setting or image maximum.
     /// The returned allocation is byte-aligned and may be reused between calls.

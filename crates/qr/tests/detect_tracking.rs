@@ -1,7 +1,7 @@
 #![cfg(feature = "detect")]
 
-use qr::core::{Segment, SCRATCH_BYTES};
-use qr::detect::*;
+use tessipher::core::{Segment, SCRATCH_BYTES};
+use tessipher::detect::*;
 
 fn symbol(scale: usize, damaged_centers: bool, bad_data: bool) -> (Vec<u8>, usize) {
     let bits = include_bytes!("../../../fixtures/v1.bin");
@@ -12,7 +12,7 @@ fn symbol(scale: usize, damaged_centers: bool, bad_data: bool) -> (Vec<u8>, usiz
         for x in 0..21 {
             let i = y * 21 + x;
             let mut dark = bits[i / 8] & (128 >> (i % 8)) != 0;
-            if bad_data && !qr::core::is_function(1, x, y) {
+            if bad_data && !tessipher::core::is_function(1, x, y) {
                 rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
                 dark = rng & 0x8000_0000 != 0;
             }
@@ -21,7 +21,7 @@ fn symbol(scale: usize, damaged_centers: bool, bad_data: bool) -> (Vec<u8>, usiz
                     pixels[(y * scale + dy) * width + x * scale + dx] = if dark { 0 } else { 255 };
                 }
             }
-            if damaged_centers && !qr::core::is_function(1, x, y) {
+            if damaged_centers && !tessipher::core::is_function(1, x, y) {
                 for dy in scale / 2 - 1..=scale / 2 {
                     for dx in scale / 2 - 1..=scale / 2 {
                         pixels[(y * scale + dy) * width + x * scale + dx] =
@@ -402,7 +402,7 @@ fn unconfirmed_candidates_expire_and_terminal_errors_are_transactional() {
             false
         )
         .0,
-        Err(Error::Decode(qr::core::Error::OutputTooSmall))
+        Err(Error::Decode(tessipher::core::Error::OutputTooSmall))
     );
     assert_eq!(tracker, saved);
     let bad_cfg = DefaultConfig {
@@ -807,7 +807,7 @@ fn cached_tracker_reuses_storage_and_shares_roi_full_budget() {
             &mut stats,
             &mut cache
         ),
-        Err(Error::Decode(qr::core::Error::OutputTooSmall))
+        Err(Error::Decode(tessipher::core::Error::OutputTooSmall))
     );
     assert_eq!(tracker.state(), initial);
 }

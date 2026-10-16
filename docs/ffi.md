@@ -68,7 +68,7 @@ Use `--no-default-features --release` for firmware.
 The no-host staticlib includes a panic handler that loops indefinitely if a panic occurs and does not unwind into C.
 Linking this rlib alongside another Rust panic handler is not an intended use.
 For direct use from Rust firmware, depend on the `tessipher` package and use its
-`qr` library instead.
+`tessipher` library instead.
 
 The `QR_MAX_WIDTH` and `QR_MAX_HEIGHT` environment variables independently set the C ABI's compile-time image limits, each in 1–32768 and defaulting to 640.
 For example: `QR_MAX_WIDTH=640 QR_MAX_HEIGHT=240 cargo build -p tessipher-ffi --release`.

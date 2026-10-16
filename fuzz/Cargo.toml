@@ -7,7 +7,7 @@ edition = "2021"
 cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
-qr = { package = "tessipher", version = "0.1.0", path = "../crates/qr" }
+tessipher = { version = "0.1.0", path = "../crates/qr" }
 [workspace]
 [[bin]]
 name = "matrix"

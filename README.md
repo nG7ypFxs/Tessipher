@@ -13,8 +13,23 @@ code has [separate licenses](THIRD_PARTY.md).
 
 ## Getting started
 
-The Rust package is `tessipher`; the library name is `qr`. The first crates.io
-release has not been published yet. Clone the repository and run the host example:
+The Rust package and library are both named `tessipher`. For a crates.io
+release, use this dependency declaration:
+
+```toml
+[dependencies]
+tessipher = "0.1.0"
+```
+
+For development against a local checkout, use a path dependency instead:
+
+```toml
+[dependencies]
+tessipher = { path = "../Tessipher/crates/qr" }
+```
+
+Adjust the path for your project layout. Before the first registry publication,
+use the checkout dependency. To try the repository's host example:
 
 ```sh
 git clone https://github.com/nG7ypFxs/Tessipher.git
@@ -26,16 +41,6 @@ The example prints `payload bytes: [84, 69, 83, 84]`, the bytes for `TEST`.
 Its small file reader accepts binary PGM (`P5`) with a three-line header,
 maximum value `255`, and no comments; it is not a general image-file loader.
 
-To use the library in another Cargo project beside this checkout, add:
-
-```toml
-[dependencies]
-qr = { package = "tessipher", path = "../Tessipher/crates/qr" }
-```
-
-Adjust the path for your project layout. After the planned first release is
-published, the dependency can use `version = "0.1.0"` instead of `path`.
-
 ## Decode an image in Rust
 
 A Gray8 image is a borrowed view, so a region of interest can use the original
@@ -43,7 +48,7 @@ frame's stride without copying pixels. This example reads a 640 × 240 region
 from a frame with a 1920-byte stride:
 
 ```rust
-use qr::{Config, GrayImage, Segment, Detection};
+use tessipher::{Config, GrayImage, Segment, Detection};
 
 fn decode_roi(
     frame_roi: &[u8],
@@ -51,14 +56,14 @@ fn decode_roi(
     core_scratch: &mut [u8],
     payload: &mut [u8],
     segments: &mut [Segment],
-) -> Result<Detection, qr::detect::Error> {
+) -> Result<Detection, tessipher::detect::Error> {
     let config = Config::<640, 240>::default();
     let image = GrayImage::new(frame_roi, 640, 240, 1920)?;
-    qr::decode_gray(image, &config, detector_scratch, core_scratch, payload, segments)
+    tessipher::decode_gray(image, &config, detector_scratch, core_scratch, payload, segments)
 }
 ```
 
-Query storage sizes with `qr::memory_requirements(&config)` before allocating.
+Query storage sizes with `tessipher::memory_requirements(&config)` before allocating.
 With the default configuration, scratch needs are:
 
 | Storage | Bytes |
@@ -73,12 +78,12 @@ The compile-time width and height limits each default to 640. Finder storage,
 candidate search, sampling attempts, and pixel reads have separate limits; see
 [the detection specification](docs/detection.md) for budgets and recognition limits.
 
-For already sampled modules, use `qr::core::Matrix::new(bits, side)` and
-`qr::decode_matrix(...)` (also available as `qr::core::decode(...)`). Bits are
+For already sampled modules, use `tessipher::core::Matrix::new(bits, side)` and
+`tessipher::decode_matrix(...)` (also available as `tessipher::core::decode(...)`). Bits are
 packed row-major, most-significant bit first, with no padding between rows.
 Model 2 sides range from 21 to 177 modules (`17 + 4 × version`).
 
-Matrix input can use version-sized scratch: `qr::core::scratch_bytes(version)`
+Matrix input can use version-sized scratch: `tessipher::core::scratch_bytes(version)`
 returns 460 bytes for V1 and 7077 for V40. Model 2 image detection and tracking
 need the full 7077 bytes because the version is unknown. Micro QR matrix and
 image decoding need only 184 core bytes, plus detector scratch for images.
@@ -99,13 +104,13 @@ metadata; the caller joins symbols.
 
 | Cargo feature | Effect |
 | --- | --- |
-| `detect` (default) | Adds Model 2 Gray8 image detection through `qr::detect` |
+| `detect` (default) | Adds Model 2 Gray8 image detection through `tessipher::detect` |
 | `micro-qr` | Adds Micro QR M1–M4 matrix decoding |
 | `micro-qr-detect` | Adds Micro QR Gray8 detection; enables `detect` and `micro-qr` |
 
 Use `default-features = false` for matrix-only builds. For Micro QR, call
-`qr::MicroMatrix::new(bits, side)` with `qr::decode_micro_matrix(...)`, or use
-`qr::decode_micro_gray(...)` for images. Micro QR supports all legal error-correction
+`tessipher::MicroMatrix::new(bits, side)` with `tessipher::decode_micro_matrix(...)`, or use
+`tessipher::decode_micro_gray(...)` for images. Micro QR supports all legal error-correction
 levels, masks 0–3, and Numeric, Alphanumeric, Byte, and Kanji modes. Its quiet
 zone is two modules wide.
 
@@ -114,8 +119,8 @@ results, character-set conversion, camera control, and image-file loading are
 outside the public library's scope.
 
 Rust image calls use center sampling by default. To retry failed center samples
-with five-point voting, use `qr::decode_gray_with_sampling` and
-`SamplingStrategy::CenterThenMajority5`. `qr::Tracker` can reuse a recent symbol's
+with five-point voting, use `tessipher::decode_gray_with_sampling` and
+`SamplingStrategy::CenterThenMajority5`. `tessipher::Tracker` can reuse a recent symbol's
 region across frames, falling back to a full-image search when needed. It retains
 no image, scratch, or payload between calls. See [the API guide](docs/api.md) for
 usage and [the detection specification](docs/detection.md) for state transitions.

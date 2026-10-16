@@ -10,7 +10,7 @@
 //! arguments, and 2 for overlapping nonempty ranges. Detector errors are 10..=18:
 //! invalid image, oversized image, invalid config, short detector scratch, finder
 //! capacity, candidate budget, retry budget, not found, and pixel-read budget. Core errors are
-//! `100 + qr::core::Error` (101..=110). Result structs are written only on success.
+//! `100 + tessipher::core::Error` (101..=110). Result structs are written only on success.
 //! Buffer contents are unspecified on error; only returned prefixes are valid on
 //! success. Numeric checks cannot establish pointer allocation validity.
 //!
@@ -22,7 +22,7 @@ use core::{
     mem::{align_of, size_of},
     ptr, slice,
 };
-use qr::{core as qcore, detect};
+use tessipher::{core as qcore, detect};
 include!(concat!(env!("OUT_DIR"), "/dimensions.rs"));
 macro_rules! abi_struct {
     ($(#[doc = $doc:literal])* $rust:ident => $c:literal {
@@ -390,7 +390,7 @@ pub unsafe extern "C" fn qr_decode_micro_matrix(
 ///
 /// `side` must be `17 + 4 * version` for version 1..=40. Supply at least
 /// [`qr_matrix_scratch_bytes`] scratch bytes for the version. Segment capacity may not exceed
-/// [`qr::core::MAX_SEGMENTS`]. Both output capacities may be smaller than the
+/// [`tessipher::core::MAX_SEGMENTS`]. Both output capacities may be smaller than the
 /// maximum; insufficient space returns a core capacity error.
 /// Normal orientation is tried first, then its transpose after content errors.
 ///
@@ -724,7 +724,7 @@ pub unsafe extern "C" fn qr_decode_micro_gray_with_sampling(
 /// stride at least width, and storage at least `(height - 1) * stride + width`.
 /// The last row needs no trailing padding. Compiled limits are [`MAX_WIDTH`] and
 /// [`MAX_HEIGHT`]; query [`qr_memory`] for scratch sizes and alignment.
-/// Segment capacity may not exceed [`qr::core::MAX_SEGMENTS`].
+/// Segment capacity may not exceed [`tessipher::core::MAX_SEGMENTS`].
 ///
 /// Returns 0 on success, 1 for invalid numeric arguments, 2 for overlap,
 /// 10..=18 for detector errors, or 101..=110 for core errors. Read only the returned

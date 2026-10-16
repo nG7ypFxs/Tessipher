@@ -1,7 +1,7 @@
 #![cfg(feature = "detect")]
 
-use qr::core::{Segment, SCRATCH_BYTES};
-use qr::detect::*;
+use tessipher::core::{Segment, SCRATCH_BYTES};
+use tessipher::detect::*;
 fn image_rect(v: u8, scale_x: usize, scale_y: usize) -> (Vec<u8>, usize, usize) {
     let bits: &[u8] = match v {
         1 => include_bytes!("../../../fixtures/v1.bin"),
@@ -293,13 +293,13 @@ fn anisotropic_module_pitch() {
 
 fn undecodable_frame() -> Vec<u8> {
     let bits = include_bytes!("../../../fixtures/v7.bin");
-    let matrix = qr::core::Matrix::new(bits, 45).unwrap();
+    let matrix = tessipher::core::Matrix::new(bits, 45).unwrap();
     let mut pixels = vec![255; 640 * 640];
     let mut rng = 0x12345678u32;
     for y in 0..45 {
         for x in 0..45 {
             let mut dark = matrix.get(x, y) == Some(true);
-            if !qr::core::is_function(7, x, y) {
+            if !tessipher::core::is_function(7, x, y) {
                 rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
                 dark = rng & 0x8000_0000 != 0;
             }
@@ -353,7 +353,13 @@ fn shared_pass_budgets_and_final_error_priority_keep_stats() {
     let mut output = [0; 32];
     let mut segments = [Segment::EMPTY; 8];
     for (max_candidates, max_retries, error, candidates, passes) in [
-        (4096, 256, Error::Decode(qr::core::Error::Version), 2, 4),
+        (
+            4096,
+            256,
+            Error::Decode(tessipher::core::Error::Version),
+            2,
+            4,
+        ),
         (1, 256, Error::CandidateBudget, 1, 3),
         (4096, 30, Error::RetryBudget, 2, 3),
     ] {
@@ -435,8 +441,8 @@ fn capacity_errors_stop_on_first_decoded_matrix() {
     let mut output = [0; 32];
     let mut segments = [Segment::EMPTY; 8];
     for (out_capacity, segment_capacity, error) in [
-        (0, 8, qr::core::Error::OutputTooSmall),
-        (32, 0, qr::core::Error::SegmentsTooSmall),
+        (0, 8, tessipher::core::Error::OutputTooSmall),
+        (32, 0, tessipher::core::Error::SegmentsTooSmall),
     ] {
         let (result, stats) = decode_stats(
             &pixels,
@@ -615,7 +621,7 @@ fn validation_precedes_pixel_reads_and_low_contrast_is_charged() {
     assert_eq!(stats, Stats::default());
     assert_eq!(
         decode_with_stats(image, &cfg, &mut ds, &mut [], &mut [], &mut [], &mut stats),
-        Err(Error::Decode(qr::core::Error::ScratchTooSmall))
+        Err(Error::Decode(tessipher::core::Error::ScratchTooSmall))
     );
     assert_eq!(stats, Stats::default());
     assert_eq!(

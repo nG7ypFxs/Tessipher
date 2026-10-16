@@ -1,4 +1,4 @@
-use qr::core::*;
+use tessipher::core::*;
 #[derive(Default)]
 struct Bits(Vec<bool>);
 impl Bits {

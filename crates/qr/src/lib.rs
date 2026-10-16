@@ -6,8 +6,8 @@
 //! builds; enable `micro-qr` for Micro QR matrix decoding and
 //! `micro-qr-detect` for Micro QR image detection.
 //!
-//! The package is published as `tessipher` while its stable Rust library name
-//! remains `qr`, so applications can write `use qr::core::Matrix;`.
+//! The package and Rust library are both named `tessipher`, so applications can
+//! write `use tessipher::core::Matrix;`.
 //!
 //! For sampled Model 2 matrices, [`core::scratch_bytes`] permits smaller allocations
 //! when the version is known (460 bytes at V1). Image detection and tracking use
@@ -16,21 +16,21 @@
 //!
 //! ```
 //! # #[cfg(feature = "detect")]
-//! # fn main() -> Result<(), qr::detect::Error> {
-//! use qr::{Config, GrayImage, Segment};
+//! # fn main() -> Result<(), tessipher::detect::Error> {
+//! use tessipher::{Config, GrayImage, Segment};
 //! let config = Config::<8, 8>::default();
-//! let required = qr::memory_requirements(&config)?;
-//! assert_eq!(required.core_bytes, qr::core::SCRATCH_BYTES);
+//! let required = tessipher::memory_requirements(&config)?;
+//! assert_eq!(required.core_bytes, tessipher::core::SCRATCH_BYTES);
 //! assert_eq!(required.detector_bytes, 4557);
 //! let pixels = [255; 64];
 //! let image = GrayImage::new(&pixels, 8, 8, 8)?;
 //! let mut detector_scratch = [0; 4557];
-//! let mut core_scratch = [0; qr::core::SCRATCH_BYTES];
+//! let mut core_scratch = [0; tessipher::core::SCRATCH_BYTES];
 //! let mut payload = [0; 32];
 //! let mut segments = [Segment::EMPTY; 4];
-//! let result = qr::decode_gray(image, &config, &mut detector_scratch,
+//! let result = tessipher::decode_gray(image, &config, &mut detector_scratch,
 //!     &mut core_scratch, &mut payload, &mut segments);
-//! assert_eq!(result, Err(qr::detect::Error::NotFound));
+//! assert_eq!(result, Err(tessipher::detect::Error::NotFound));
 //! # Ok(())
 //! # }
 //! # #[cfg(not(feature = "detect"))]

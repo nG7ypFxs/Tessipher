@@ -1,5 +1,5 @@
 //! Host-only example. The library itself neither allocates nor reads files.
-use qr::{core, detect};
+use tessipher::{core, detect};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
         .nth(1)

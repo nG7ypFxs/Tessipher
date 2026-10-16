@@ -41,8 +41,15 @@ After an intentional change, run `uv run tools/c_format.py --write` and
 `uv run tools/check_header.py --write`, then repeat the C checks.
 The tools install their pinned formatter through uv; Cargo builds do not need it.
 
-For detection implementation details, read [detect.rs](../crates/qr/src/detect.rs)
-and [core](../crates/qr/src/core). For performance changes, run the relevant
+The detector's public types and entry points live in
+[detect.rs](../crates/qr/src/detect.rs). The [implementation modules](../crates/qr/src/detect)
+separate thresholding and caches, finder scans, projection sampling, region
+searches, tracking, and Micro QR. Unit tests sit alongside the owning component.
+The [C ABI sources](../crates/qr-ffi/src) separate shared ABI and matrix APIs
+(`lib.rs`), buffer validation (`input.rs`), and Gray8/tracker APIs (`gray.rs`).
+Matrix decoding lives in [core.rs](../crates/qr/src/core.rs), with supporting
+modules in [core/](../crates/qr/src/core).
+For performance changes, run the relevant
 [benchmarks](benchmarks.md). Keep guides focused on reader tasks; API inventories
 belong in rustdoc or the header. Keep temporary reports and work notes in `target/`.
 

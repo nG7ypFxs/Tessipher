@@ -98,8 +98,9 @@ def markdown_files(root):
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=root, stdout=subprocess.PIPE, check=True,
     )
-    return sorted({root / name for name in result.stdout.decode().split("\0")
-                   if name.lower().endswith(".md")})
+    candidates = {root / name for name in result.stdout.decode().split("\0")
+                  if name.lower().endswith(".md")}
+    return sorted(path for path in candidates if path.is_file())
 
 
 def check_links(paths, root):

@@ -179,6 +179,8 @@ jobs:
             cd target/release-assets
             sha256sum -- *.crate CHANGELOG.md > SHA256SUMS
           fi
+      - name: Dry-run crates.io publication
+        run: cargo publish --dry-run -p tessipher --registry crates-io --locked
       - name: Upload verified release assets
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

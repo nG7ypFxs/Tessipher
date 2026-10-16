@@ -116,13 +116,67 @@ before retrying. To verify a downloaded crate, run `sha256sum --check SHA256SUMS
 from the directory containing the crate, changelog, and checksum file
 (`shasum -a 256 -c SHA256SUMS` on macOS).
 
-## Optional crates.io publication
+## crates.io publication
 
-Registry publication remains a separate maintainer action. Check package-name
-availability or ownership and that the version has not already been published,
-then use locally configured registry credentials:
+The registry package and Rust library are both named `tessipher`. Only that package
+is published. Its manifest restricts publication to `crates-io`, while
+`tessipher-ffi` and the fuzz harness use `publish = false`. The package contains
+the runtime sources, build script, README, MIT/Apache licenses, and third-party
+notices. Repository fixtures, integration examples, and development tools remain
+outside the registry archive.
+
+The package job runs `cargo publish --dry-run` against crates.io for each
+candidate. This packages and verifies the crate without uploading it or needing
+a publishing token. Local preparation uses the same command:
 
 ```sh
-cargo publish --dry-run -p tessipher --locked
-cargo publish -p tessipher --locked
+cargo publish --dry-run -p tessipher --registry crates-io --locked
+python3 tools/package_check.py
 ```
+
+### First publication
+
+Use the same reviewed commit and version as the GitHub Release. Wait for the
+complete tag CI and check the release artifacts before publishing.
+
+1. Sign in to crates.io with the intended GitHub account and verify the account
+   email address. Recheck package-name availability immediately before publishing;
+   a successful dry-run does not reserve the name or test ownership permissions.
+2. Create a short-lived crates.io API token permitting a new package publication.
+   Configure it locally through Cargo's interactive prompt:
+
+   ```sh
+   cargo login --registry crates-io
+   ```
+
+3. From the clean checkout of the release tag, run the dry-run and package checker
+   above, then explicitly publish the public package:
+
+   ```sh
+   cargo publish -p tessipher --registry crates-io --locked
+   ```
+
+4. Confirm the version on [crates.io](https://crates.io/crates/tessipher) and the
+   [docs.rs build](https://docs.rs/crate/tessipher). Test the README's version
+   dependency in a separate project without a local path or patch override.
+
+The package requests all features for docs.rs. It has no runtime dependencies;
+its unpacked crate is tested separately from repository-only fixtures. See
+[Cargo's publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html)
+for account setup and token handling.
+
+### Subsequent Actions publication
+
+For future versions, crates.io supports
+[Trusted Publishing](https://crates.io/docs/trusted-publishing): register the
+GitHub repository and exact workflow filename after the first publication, then
+let a dedicated publish job exchange its GitHub OIDC identity for a short-lived
+registry token. That job needs `id-token: write` and must wait for the same
+verification jobs as the GitHub Release. If using a GitHub environment, register
+that exact environment name in the trusted publisher configuration too.
+
+The existing workflow currently performs the registry dry-run; registry upload
+is a separate maintainer step until Trusted Publishing is configured and its
+publish job is enabled. See the
+[crates.io announcement](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)
+for the first-publication bootstrap and OIDC flow.

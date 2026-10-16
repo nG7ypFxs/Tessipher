@@ -145,7 +145,7 @@ abi_struct! {
     candidates: usize,
     /// Sampling attempts, including fallback; core transpose adds no attempt.
     retries: usize,
-    /// Threshold/polarity passes (up to 4 stateless, 8 tracked).
+    /// Threshold/polarity passes (Direct: up to 4 stateless, 8 tracked; Fast: up to 16/32).
     passes: usize
 }}
 abi_struct! {

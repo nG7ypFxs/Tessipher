@@ -751,8 +751,18 @@ fn cached_tracker_reuses_storage_and_shares_roi_full_budget() {
             &mut cache,
         );
         assert_eq!(raw_tracker.state(), cached_tracker.state());
-        assert_eq!(stats.pixel_reads, raw_stats.pixel_reads); // these frames succeed globally
-        assert_eq!(raw, cached);
+        // These frames succeed globally. Direct can finish exact 0/255 range
+        // discovery early; the explicit row-cache API retains scalar discovery.
+        assert!(raw_stats.pixel_reads <= stats.pixel_reads);
+        let mut normalized_stats = stats;
+        normalized_stats.pixel_reads = raw_stats.pixel_reads;
+        assert_eq!(normalized_stats, raw_stats);
+        let normalized = cached.map(|mut found| {
+            assert_eq!(found.stats, stats);
+            found.stats.pixel_reads = raw_stats.pixel_reads;
+            found
+        });
+        assert_eq!(raw, normalized);
         if let Ok(found) = cached {
             assert_eq!(&output[..found.decoded.payload_len], b"TEST");
         }
@@ -826,7 +836,7 @@ fn cached_tracker_local_roi_full_attempts_have_fresh_tags() {
     let pixels = &file[offset..];
     let image = view(pixels, 360, 360);
     let cfg = DefaultConfig {
-        max_pixel_reads: usize::MAX,
+        max_pixel_reads: DEFAULT_MAX_PIXEL_READS,
         ..Default::default()
     };
     let hint = TrackHint {
@@ -871,7 +881,9 @@ fn cached_tracker_local_roi_full_attempts_have_fresh_tags() {
     let raw = raw.unwrap();
     assert!(raw.local_threshold);
     assert!(raw_stats.passes > 3);
-    assert!(stats.pixel_reads < raw_stats.pixel_reads);
+    assert!(cache.iter().any(|&b| b != 0xa5));
+    assert!(stats.pixel_reads <= cfg.max_pixel_reads);
+    assert!(raw_stats.pixel_reads <= cfg.max_pixel_reads);
     let mut normalized = cached;
     normalized.stats.pixel_reads = raw.stats.pixel_reads;
     assert_eq!(raw, normalized);
@@ -904,6 +916,8 @@ fn cached_tracker_local_roi_full_attempts_have_fresh_tags() {
     assert_eq!(raw, cached);
     assert!(raw.is_err());
     assert_eq!(tracker.state(), raw_tracker.state());
+    assert!(stats.pixel_reads <= cfg.max_pixel_reads);
+    assert!(raw_stats.pixel_reads <= cfg.max_pixel_reads);
     stats.pixel_reads = raw_stats.pixel_reads;
     assert_eq!(stats, raw_stats);
 }

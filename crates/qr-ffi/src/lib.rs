@@ -1,7 +1,8 @@
 //! Allocation-free C ABI for QR Model 2 and opt-in Micro QR decoding.
 //!
 //! Call [`qr_default_config`] and [`qr_memory`] before allocating caller-owned
-//! storage. [`qr_decode_matrix`] and [`qr_decode_gray`] borrow input and initialize
+//! storage; [`qr_detector_scratch_bytes`] recommends optional Fast scratch.
+//! [`qr_decode_matrix`] and [`qr_decode_gray`] borrow input and initialize
 //! writable scratch, payload, and segment storage before constructing Rust slices.
 //! No allocator is required. With the default `host` feature this crate links std;
 //! firmware builds use `--no-default-features --release` and a looping panic handler.
@@ -252,6 +253,39 @@ pub unsafe extern "C" fn qr_memory(c: *const QrConfig, out: *mut QrMemory) -> i3
         unsafe {
             out.write(r);
         }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => e,
+    }
+}
+/// Queries recommended byte-aligned detector scratch for a mode and image dimensions.
+///
+/// Direct returns the minimum reported by [`qr_memory`]. Fast recommends
+/// additional caller-owned storage for local-threshold memoization. Fast also
+/// accepts the minimum size, falling back to uncached local decisions.
+/// Returns 1 for invalid pointers, 2 for overlap, or 12 for invalid configuration,
+/// mode, or dimensions. `out` is written only on success.
+/// # Safety
+/// `c` must point to one initialized, readable [`QrConfig`] that remains unchanged.
+/// `out` must point to a live, aligned, exclusively writable `size_t`. The two
+/// allocations must be disjoint. `out` need not be initialized.
+#[no_mangle]
+pub unsafe extern "C" fn qr_detector_scratch_bytes(
+    c: *const QrConfig,
+    mode: u32,
+    width: usize,
+    height: usize,
+    out: *mut usize,
+) -> i32 {
+    let run = || -> Result<(), i32> {
+        disjoint(&[range(c, 1)?, range(out, 1)?])?;
+        let mode = detection_mode(mode)?;
+        let needed = config(unsafe { c.read() })
+            .scratch_bytes_for_mode(mode, width, height)
+            .map_err(status)?;
+        unsafe { out.write(needed) };
         Ok(())
     };
     match run() {
@@ -785,7 +819,8 @@ pub unsafe extern "C" fn qr_decode_gray(
 ///
 /// `max_pixel_reads` accepts 1..=usize::MAX. Zero returns 12; exhaustion returns 18
 /// before another pixel read. Includes initial min/max, all passes and repeated
-/// reads; local threshold decisions cost 26 reads. The default entry point uses
+/// reads. Direct reuses local scan summaries; uncached local decisions cost 26
+/// reads. The default entry point uses
 /// [`detect::DEFAULT_MAX_PIXEL_READS`]. This limit does not bound total CPU cycles
 /// or initialization of caller-provided buffers. The ABI-1 config/result/memory
 /// layouts remain unchanged. `out` is written only on success.
@@ -843,6 +878,20 @@ pub const QR_SAMPLING_CENTER_THEN_MAJORITY5: u32 = 1;
 /// Sampling policy used by the existing stateless Gray8 C entry points.
 pub const QR_DEFAULT_SAMPLING_STRATEGY: u32 = QR_SAMPLING_CENTER_THEN_MAJORITY5;
 
+/// Optimized scanning and local-threshold summaries in existing detector scratch.
+pub const QR_MODE_DIRECT: u32 = 0;
+/// Direct processing with a coarse search before the full-resolution fallback.
+pub const QR_MODE_FAST: u32 = 2;
+/// Detection mode used by non-cached Gray8 C entry points.
+pub const QR_DEFAULT_DETECTION_MODE: u32 = QR_MODE_DIRECT;
+
+fn detection_mode(n: u32) -> Result<detect::DetectionMode, i32> {
+    match n {
+        QR_MODE_DIRECT => Ok(detect::DetectionMode::Direct),
+        QR_MODE_FAST => Ok(detect::DetectionMode::Fast),
+        _ => Err(12),
+    }
+}
 fn sampling(n: u32) -> Result<detect::SamplingStrategy, i32> {
     match n {
         QR_SAMPLING_CENTER => Ok(detect::SamplingStrategy::Center),
@@ -1008,6 +1057,7 @@ struct GrayCall {
     c: *const QrConfig,
     max_pixel_reads: usize,
     strategy: u32,
+    mode: u32,
     tracker: Option<*mut QrTracker>,
     pixels: *const u8,
     pixels_len: usize,
@@ -1049,6 +1099,7 @@ unsafe fn gray_call(a: GrayCall) -> i32 {
             },
         ])?;
         let strategy = sampling(a.strategy)?;
+        let mode = detection_mode(a.mode)?;
         let mut tracker = match a.tracker {
             Some(p) => Some(restore(unsafe { p.read() })?),
             None => None,
@@ -1089,11 +1140,11 @@ unsafe fn gray_call(a: GrayCall) -> i32 {
             (None, Some(cache)) => detect::decode_with_sampling_cached(
                 image, &cfg, strategy, ds, cs, output, segments, &mut stats, cache,
             ),
-            (Some(t), None) => {
-                t.decode_with_stats(image, &cfg, strategy, ds, cs, output, segments, &mut stats)
-            }
-            (None, None) => detect::decode_with_sampling(
-                image, &cfg, strategy, ds, cs, output, segments, &mut stats,
+            (Some(t), None) => t.decode_with_mode(
+                image, &cfg, mode, strategy, ds, cs, output, segments, &mut stats,
+            ),
+            (None, None) => detect::decode_with_mode(
+                image, &cfg, mode, strategy, ds, cs, output, segments, &mut stats,
             ),
         };
         if !a.stats.is_null() {
@@ -1154,6 +1205,67 @@ pub unsafe extern "C" fn qr_decode_gray_with_sampling(
     unsafe {
         gray_call(GrayCall {
             cache: None,
+            mode: QR_DEFAULT_DETECTION_MODE,
+            c,
+            max_pixel_reads,
+            strategy,
+            tracker: None,
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            stats,
+        })
+    }
+}
+
+/// Decodes Gray8 with explicit detection mode, sampling, pixel budget, and optional stats.
+/// Modes 0/2 select Direct/Fast; other values (including retired value 1) return
+/// 12 before writable storage is initialized. Non-cached entry points default to Direct.
+/// Fast first tries coarse scanning, then full scanning after recognition failure;
+/// its first successful symbol can differ when an image contains multiple symbols.
+/// All modes accept the minimum scratch lengths reported by [`qr_memory`].
+/// [`qr_detector_scratch_bytes`] recommends extra Fast scratch for the supplied
+/// image dimensions; the extra storage avoids repeated local-threshold work.
+/// # Safety
+/// All pointer and exclusive-access requirements of [`qr_decode_gray_with_sampling`] apply.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_decode_gray_with_mode(
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    mode: u32,
+    strategy: u32,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrResult,
+    stats: *mut QrStats,
+) -> i32 {
+    unsafe {
+        gray_call(GrayCall {
+            cache: None,
+            mode,
             c,
             max_pixel_reads,
             strategy,
@@ -1209,6 +1321,7 @@ pub unsafe extern "C" fn qr_decode_gray_with_sampling_cached(
     unsafe {
         gray_call(GrayCall {
             cache: Some((cache, cache_len)),
+            mode: QR_MODE_DIRECT,
             c,
             max_pixel_reads,
             strategy,
@@ -1271,6 +1384,65 @@ pub unsafe extern "C" fn qr_tracker_decode_gray(
     unsafe {
         gray_call(GrayCall {
             cache: None,
+            mode: QR_DEFAULT_DETECTION_MODE,
+            c,
+            max_pixel_reads,
+            strategy,
+            tracker: Some(tracker),
+            pixels,
+            pixels_len,
+            width,
+            height,
+            stride,
+            detector_scratch,
+            detector_scratch_len,
+            core_scratch,
+            core_scratch_len,
+            payload,
+            payload_len,
+            segments,
+            segment_capacity,
+            out,
+            stats,
+        })
+    }
+}
+
+/// Decodes one tracked frame with an explicit detection mode.
+/// Unknown modes return 12 before modifying tracker, result, stats, or buffers.
+/// Mode selection and scratch requirements match [`qr_decode_gray_with_mode`].
+/// Terminal decoder errors preserve tracker state as in [`qr_tracker_decode_gray`].
+/// # Safety
+/// All pointer, initialization, and exclusive-access requirements of
+/// [`qr_tracker_decode_gray`] apply.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn qr_tracker_decode_gray_with_mode(
+    tracker: *mut QrTracker,
+    c: *const QrConfig,
+    max_pixel_reads: usize,
+    mode: u32,
+    strategy: u32,
+    pixels: *const u8,
+    pixels_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    detector_scratch: *mut u8,
+    detector_scratch_len: usize,
+    core_scratch: *mut u8,
+    core_scratch_len: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    segments: *mut QrSegment,
+    segment_capacity: usize,
+    out: *mut QrResult,
+    stats: *mut QrStats,
+) -> i32 {
+    unsafe {
+        gray_call(GrayCall {
+            cache: None,
+            mode,
             c,
             max_pixel_reads,
             strategy,
@@ -1327,6 +1499,7 @@ pub unsafe extern "C" fn qr_tracker_decode_gray_cached(
     unsafe {
         gray_call(GrayCall {
             cache: Some((cache, cache_len)),
+            mode: QR_MODE_DIRECT,
             c,
             max_pixel_reads,
             strategy,
@@ -1353,6 +1526,245 @@ pub unsafe extern "C" fn qr_tracker_decode_gray_cached(
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct ModeCall {
+        config: QrConfig,
+        pixels: Vec<u8>,
+        width: usize,
+        height: usize,
+        detector: Vec<u8>,
+        core: Vec<u8>,
+        payload: [u8; 32],
+        segments: [QrSegment; 8],
+        result: QrResult,
+        stats: QrStats,
+        tracker: QrTracker,
+        cache: Vec<u8>,
+    }
+    impl ModeCall {
+        fn new(file: &[u8]) -> Self {
+            let mut lines = file.splitn(4, |&b| b == b'\n');
+            assert_eq!(lines.next().unwrap(), b"P5");
+            let dimensions = core::str::from_utf8(lines.next().unwrap()).unwrap();
+            let mut dimensions = dimensions.split_whitespace().map(|n| n.parse().unwrap());
+            let width = dimensions.next().unwrap();
+            let height = dimensions.next().unwrap();
+            assert_eq!(lines.next().unwrap(), b"255");
+            let pixels = lines.next().unwrap().to_vec();
+            let mut config = QrConfig::default();
+            let mut memory = QrMemory::default();
+            unsafe {
+                assert_eq!(qr_default_config(&mut config), 0);
+                assert_eq!(qr_memory(&config, &mut memory), 0);
+            }
+            Self {
+                config,
+                pixels,
+                width,
+                height,
+                detector: vec![0xa5; memory.detector_scratch_bytes],
+                core: vec![0xa5; memory.core_scratch_bytes],
+                payload: [0xa5; 32],
+                segments: [QrSegment::default(); 8],
+                result: QrResult {
+                    version: 777,
+                    ..QrResult::default()
+                },
+                stats: QrStats {
+                    pixel_reads: 777,
+                    ..QrStats::default()
+                },
+                tracker: QrTracker::default(),
+                cache: vec![0xa5; width * 5],
+            }
+        }
+        fn args(&mut self, mode: u32, strategy: u32, budget: usize) -> GrayCall {
+            GrayCall {
+                cache: None,
+                c: &self.config,
+                max_pixel_reads: budget,
+                strategy,
+                mode,
+                tracker: Some(&mut self.tracker),
+                pixels: self.pixels.as_ptr(),
+                pixels_len: self.pixels.len(),
+                width: self.width,
+                height: self.height,
+                stride: self.width,
+                detector_scratch: self.detector.as_mut_ptr(),
+                detector_scratch_len: self.detector.len(),
+                core_scratch: self.core.as_mut_ptr(),
+                core_scratch_len: self.core.len(),
+                payload: self.payload.as_mut_ptr(),
+                payload_len: self.payload.len(),
+                segments: self.segments.as_mut_ptr(),
+                segment_capacity: self.segments.len(),
+                out: &mut self.result,
+                stats: &mut self.stats,
+            }
+        }
+        fn call(&mut self, api: u8, mode: u32, strategy: u32, budget: usize) -> i32 {
+            let a = self.args(mode, strategy, budget);
+            macro_rules! call {
+                ($function:ident, [$($prefix:expr),*], [$($suffix:expr),*]) => {
+                    unsafe { $function($($prefix,)* a.pixels, a.pixels_len, a.width,
+                        a.height, a.stride, a.detector_scratch, a.detector_scratch_len,
+                        a.core_scratch, a.core_scratch_len, a.payload, a.payload_len,
+                        a.segments, a.segment_capacity, a.out $(, $suffix)*) }
+                };
+            }
+            match api {
+                0 => call!(qr_decode_gray, [a.c], []),
+                1 => call!(qr_decode_gray_with_budget, [a.c, budget], []),
+                2 => call!(
+                    qr_decode_gray_with_sampling,
+                    [a.c, budget, strategy],
+                    [a.stats]
+                ),
+                3 => call!(
+                    qr_tracker_decode_gray,
+                    [a.tracker.unwrap(), a.c, budget, strategy],
+                    [a.stats]
+                ),
+                4 => call!(
+                    qr_decode_gray_with_sampling_cached,
+                    [a.c, budget, strategy],
+                    [a.stats, self.cache.as_mut_ptr(), self.cache.len()]
+                ),
+                5 => call!(
+                    qr_tracker_decode_gray_cached,
+                    [a.tracker.unwrap(), a.c, budget, strategy],
+                    [a.stats, self.cache.as_mut_ptr(), self.cache.len()]
+                ),
+                6 => call!(
+                    qr_decode_gray_with_mode,
+                    [a.c, budget, mode, strategy],
+                    [a.stats]
+                ),
+                7 => call!(
+                    qr_tracker_decode_gray_with_mode,
+                    [a.tracker.unwrap(), a.c, budget, mode, strategy],
+                    [a.stats]
+                ),
+                _ => unreachable!(),
+            }
+        }
+        fn snapshot(&self) -> String {
+            format!(
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                self.detector,
+                self.core,
+                self.payload,
+                self.segments,
+                self.result,
+                self.stats,
+                self.tracker
+            )
+        }
+    }
+    #[test]
+    fn mode_entry_points_decode_fixtures_with_both_sampling_strategies() {
+        for file in [
+            include_bytes!("../../../fixtures/v1.pgm").as_slice(),
+            include_bytes!("../../../fixtures/lighting-v2.pgm").as_slice(),
+            include_bytes!("../../../fixtures/perspective-v7.pgm").as_slice(),
+        ] {
+            for mode in [QR_MODE_DIRECT, QR_MODE_FAST] {
+                for strategy in [QR_SAMPLING_CENTER, QR_SAMPLING_CENTER_THEN_MAJORITY5] {
+                    for api in [6, 7] {
+                        let mut case = ModeCall::new(file);
+                        assert_eq!(
+                            case.call(api, mode, strategy, 64_000_000),
+                            0,
+                            "mode={mode}, strategy={strategy}, api={api}"
+                        );
+                        assert_eq!(&case.payload[..case.result.payload_len], b"TEST");
+                        assert!(case.stats.pixel_reads <= 64_000_000);
+                        assert!(case.stats.passes <= if api == 7 { 16 } else { 8 });
+                        if api == 7 {
+                            assert_eq!(case.tracker.tag, 2);
+                            // Exercise retained ROI state, using the same mode.
+                            assert_eq!(case.call(api, mode, strategy, 64_000_000), 0);
+                            assert_eq!(&case.payload[..case.result.payload_len], b"TEST");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn unknown_modes_preserve_all_storage_before_decoder_invocation() {
+        for api in [6, 7] {
+            let mut case = ModeCall::new(include_bytes!("../../../fixtures/v1.pgm"));
+            assert_eq!(case.call(7, QR_MODE_DIRECT, 0, 64_000_000), 0);
+            let before = case.snapshot();
+            for invalid_mode in [1, u32::MAX] {
+                assert_eq!(case.call(api, invalid_mode, 0, 64_000_000), 12);
+                assert_eq!(case.snapshot(), before);
+            }
+        }
+    }
+    #[test]
+    fn explicit_modes_preserve_overlap_and_terminal_budget_contracts() {
+        for mode in [QR_MODE_DIRECT, QR_MODE_FAST] {
+            let mut case = ModeCall::new(include_bytes!("../../../fixtures/v1.pgm"));
+            assert_eq!(case.call(7, mode, 0, 64_000_000), 0);
+            let tracker = format!("{:?}", case.tracker);
+            let result = format!("{:?}", case.result);
+            let args = case.args(mode, 0, 1);
+            let before = case.snapshot();
+            assert_eq!(
+                unsafe {
+                    gray_call(GrayCall {
+                        payload: args.pixels.cast_mut(),
+                        ..args
+                    })
+                },
+                2
+            );
+            assert_eq!(case.snapshot(), before);
+            assert_eq!(case.call(7, mode, 0, 1), 18);
+            assert!(case.stats.pixel_reads <= 1);
+            assert_eq!(format!("{:?}", case.tracker), tracker);
+            assert_eq!(format!("{:?}", case.result), result);
+        }
+    }
+    #[test]
+    fn mode_unspecified_entry_points_use_direct_and_cached_apis_preserve_results() {
+        assert_eq!(QR_DEFAULT_DETECTION_MODE, QR_MODE_DIRECT);
+        for file in [
+            include_bytes!("../../../fixtures/v1.pgm").as_slice(),
+            include_bytes!("../../../fixtures/lighting-v2.pgm").as_slice(),
+        ] {
+            for api in 0..6 {
+                let mut reference = ModeCall::new(file);
+                let expected_mode = QR_MODE_DIRECT;
+                assert_eq!(
+                    reference.call(6, expected_mode, QR_DEFAULT_SAMPLING_STRATEGY, 64_000_000),
+                    0
+                );
+                let mut case = ModeCall::new(file);
+                assert_eq!(
+                    case.call(api, u32::MAX, QR_DEFAULT_SAMPLING_STRATEGY, 64_000_000),
+                    0
+                );
+                assert_eq!(
+                    format!("{:?}", case.result),
+                    format!("{:?}", reference.result)
+                );
+                assert_eq!(case.payload, reference.payload);
+                assert_eq!(
+                    format!("{:?}", case.segments),
+                    format!("{:?}", reference.segments)
+                );
+                if api == 2 || api == 3 {
+                    assert_eq!(
+                        format!("{:?}", case.stats),
+                        format!("{:?}", reference.stats)
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn cached_c_contracts_query_overlap_capacity_stats_and_tail() {
         let cfg = QrConfig {
@@ -1386,6 +1798,7 @@ mod tests {
         let mut cache = [0xa5; 48];
         let args = GrayCall {
             cache: Some((cache.as_mut_ptr(), cache.len())),
+            mode: QR_DEFAULT_DETECTION_MODE,
             c: &cfg,
             max_pixel_reads: 201,
             strategy: 0,

@@ -686,6 +686,17 @@ fn read_format(m: OrientedMatrix<'_>) -> Result<(u8, u8), Error> {
     }
     nearest(a, b, 0, 31, format_word).ok_or(Error::Format)
 }
+// A sampled header can reject a candidate only when both orientations fail.
+// Preserve the normal error, matching decode's content-error priority.
+#[cfg(feature = "detect")]
+pub(crate) fn header_error(matrix: Matrix<'_>) -> Option<Error> {
+    let check = |transposed| {
+        let m = OrientedMatrix { matrix, transposed };
+        read_format(m).and_then(|_| read_version(m)).err()
+    };
+    let normal = check(false)?;
+    check(true).map(|_| normal)
+}
 fn nearest(a: u32, b: u32, lo: u8, hi: u8, word: fn(u8) -> u32) -> Option<(u8, u8)> {
     let mut best = 4;
     let mut value = 0;

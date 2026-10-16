@@ -377,3 +377,66 @@ fn micro_decoding_does_not_allocate() {
     assert!(image_result.is_ok());
     assert_eq!(allocations, 0);
 }
+
+#[test]
+fn detection_modes_and_tracking_do_not_allocate() {
+    let pgm = include_bytes!("../../../fixtures/lighting-v2.pgm");
+    let mut lines = pgm.splitn(4, |&b| b == b'\n');
+    assert_eq!(lines.next(), Some(&b"P5"[..]));
+    let mut dimensions = core::str::from_utf8(lines.next().unwrap())
+        .unwrap()
+        .split_whitespace()
+        .map(|s| s.parse::<usize>().unwrap());
+    let (width, height) = (dimensions.next().unwrap(), dimensions.next().unwrap());
+    assert_eq!(lines.next(), Some(&b"255"[..]));
+    let image = tessipher::GrayImage::new(lines.next().unwrap(), width, height, width).unwrap();
+    let config = tessipher::DefaultConfig::default();
+    let mut detector = vec![
+        0;
+        config
+            .scratch_bytes_for_mode(tessipher::DetectionMode::Fast, width, height)
+            .unwrap()
+    ];
+    let mut core = [0; tessipher::core::SCRATCH_BYTES];
+    let mut output = [0; 16];
+    let mut segments = [tessipher::Segment::EMPTY; 8];
+    let mut stats = tessipher::Stats::default();
+    let mut successful = true;
+    start_counting();
+    for mode in [
+        tessipher::DetectionMode::Direct,
+        tessipher::DetectionMode::Fast,
+    ] {
+        successful &= tessipher::decode_gray_with_mode(
+            image,
+            &config,
+            mode,
+            tessipher::SamplingStrategy::CenterThenMajority5,
+            &mut detector,
+            &mut core,
+            &mut output,
+            &mut segments,
+            &mut stats,
+        )
+        .is_ok();
+        let mut tracker = tessipher::Tracker::new();
+        for _ in 0..2 {
+            successful &= tracker
+                .decode_with_mode(
+                    image,
+                    &config,
+                    mode,
+                    tessipher::SamplingStrategy::CenterThenMajority5,
+                    &mut detector,
+                    &mut core,
+                    &mut output,
+                    &mut segments,
+                    &mut stats,
+                )
+                .is_ok();
+        }
+    }
+    let allocations = stop_counting();
+    assert!(successful);
+    assert_eq!(allocations, 0);
+}

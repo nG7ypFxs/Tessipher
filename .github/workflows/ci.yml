@@ -29,7 +29,7 @@ jobs:
   host:
     strategy:
       matrix:
-        rust: [1.85.1, stable]
+        rust: [1.85.0, stable]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,12 +60,15 @@ jobs:
       - run: python3 -m pip install segno==1.6.6
       - run: python3 tools/generate_segno_fixtures.py && git diff --exit-code -- fixtures/
   embedded:
+    strategy:
+      matrix:
+        rust: [1.85.0, stable]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master (formerly stable)
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
-          toolchain: stable
+          toolchain: ${{ matrix.rust }}
           targets: thumbv6m-none-eabi, thumbv7em-none-eabi, wasm32-unknown-unknown
       - run: cargo build -p tessipher --no-default-features --target thumbv6m-none-eabi --release --locked
       - run: cargo build -p tessipher --no-default-features --features micro-qr --target thumbv6m-none-eabi --release --locked

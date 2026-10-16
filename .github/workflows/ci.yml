@@ -54,6 +54,13 @@ jobs:
       - run: uv run tools/c_smoke.py
       - run: python3 tools/c_micro.py
       - run: python3 tools/cross_decode.py
+      - run: python3 -m unittest discover -s tools -p test_decoder_bench.py
+      - name: Test benchmark allocation probe
+        run: |
+          c++ -std=c++20 -O2 -DNDEBUG -Wall -Wextra -Werror \
+            tools/decoder_bench/heap_probe.cpp tools/decoder_bench/heap_probe_test.cpp \
+            -o target/heap-probe-test
+          target/heap-probe-test
       - run: cargo run -p tessipher --example fuzz_smoke --release
       - run: cargo run -p tessipher --example bench --release
       - run: python3 tools/generate_fixtures.py && git diff --exit-code -- fixtures/

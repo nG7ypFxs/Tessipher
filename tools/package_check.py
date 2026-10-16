@@ -76,7 +76,7 @@ def extract(archive: Path, staging: Path) -> Path:
             expected_root + "THIRD_PARTY.md",
             expected_root + "build.rs",
             expected_root + "src/lib.rs",
-            expected_root + "src/core/mod.rs",
+            expected_root + "src/core.rs",
             expected_root + "src/core/tables.rs",
             expected_root + "src/detect.rs",
         }

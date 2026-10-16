@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn mirrored_valid_format_still_retries_after_content_failure() {
-        let corpus = include_bytes!("../../../../fixtures/all-model2.bin");
+        let corpus = include_bytes!("../../../fixtures/all-model2.bin");
         let mut cursor = 4;
         let mut beyond_format = 0;
         let mut scratch = [0; SCRATCH_BYTES];
@@ -790,7 +790,7 @@ mod tests {
 
     #[test]
     fn both_content_failures_preserve_normal_error() {
-        let corpus = include_bytes!("../../../../fixtures/all-model2.bin");
+        let corpus = include_bytes!("../../../fixtures/all-model2.bin");
         let mut cursor = 4;
         let mut bits = [0; 56];
         loop {
@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn bch_uncorrectable_matrix_copy_recovers_from_other_copy() {
-        let original = include_bytes!("../../../../fixtures/v7.bin");
+        let original = include_bytes!("../../../fixtures/v7.bin");
         let bad_format = (0..32768)
             .find(|&value| nearest(value, value, 0, 31, format_word).is_none())
             .unwrap();

@@ -21,4 +21,4 @@ micro-qr = ["tessipher/micro-qr"]
 micro-qr-detect = ["micro-qr", "tessipher/micro-qr-detect"]
 
 [dependencies]
-tessipher = { version = "0.1.0", path = "../qr" }
+tessipher = { version = "0.2.0", path = "../qr" }

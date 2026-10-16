@@ -12,7 +12,7 @@ The package and Rust library are both named `tessipher`. To use a crates.io
 release, run in your project:
 
 ```sh
-cargo add tessipher
+cargo add tessipher@0.2.0
 ```
 
 For development against a local checkout, run

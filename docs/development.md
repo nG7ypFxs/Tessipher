@@ -122,9 +122,9 @@ and the fuzz harness remain repository-only.
 
    ```sh
    git verify-commit HEAD
-   git tag -s v0.1.0 -m "Tessipher 0.1.0"
-   git verify-tag v0.1.0
-   git push origin v0.1.0
+   git tag -s v0.2.0 -m "Tessipher 0.2.0"
+   git verify-tag v0.2.0
+   git push origin v0.2.0
    ```
 
 4. Wait for all tag CI jobs. Check the GitHub Release's tested `.crate`, generated

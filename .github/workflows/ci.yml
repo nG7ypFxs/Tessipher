@@ -105,6 +105,11 @@ jobs:
           export PATH="$RUNNER_TEMP/zephyr-venv/bin:$PATH"
           python -m pip install west cmake ninja
           git clone --depth 1 --branch v4.4.2 https://github.com/zephyrproject-rtos/zephyr.git "$RUNNER_TEMP/zephyr-workspace/zephyr"
+          zephyr_head=$(git -C "$RUNNER_TEMP/zephyr-workspace/zephyr" rev-parse HEAD) || exit 1
+          if [ "$zephyr_head" != dccb09599635bdff17633fa7e9dab014b91dce90 ]; then
+            echo "Unexpected Zephyr commit; refusing dependency installation" >&2
+            exit 1
+          fi
           west init -l "$RUNNER_TEMP/zephyr-workspace/zephyr"
           (cd "$RUNNER_TEMP/zephyr-workspace" && west update cmsis cmsis_6)
           python -m pip install \

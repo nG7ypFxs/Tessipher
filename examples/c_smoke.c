@@ -7,6 +7,88 @@ static uint8_t core_scratch[8192], detector_scratch[8192], payload[7089];
 static qr_segment segments[16];
 static uint8_t matrix[56], pixels[116 * 116];
 _Static_assert(sizeof(qr_config) == 5 * sizeof(uint32_t), "ABI-1 config must remain 20 bytes");
+#ifndef QR_TEST_LEGACY_HEADER
+static void check_mode_scratch(const qr_config *settings, const qr_memory_info *memory) {
+    size_t needed = SIZE_MAX;
+    const uint32_t modes[] = {QR_MODE_DIRECT, QR_MODE_FAST};
+    assert(QR_DEFAULT_DETECTION_MODE == QR_MODE_DIRECT);
+    assert(QR_MODE_DIRECT == 0 && QR_MODE_FAST == 2);
+    for (size_t index = 0; index < sizeof modes / sizeof modes[0]; ++index) {
+        uint32_t mode = modes[index];
+        assert(qr_detector_scratch_bytes(settings, mode, 116, 116, &needed) == QR_OK);
+        assert(needed ==
+               memory->detector_scratch_bytes + (mode == QR_MODE_FAST ? (116 * 116 + 3) / 4 : 0));
+        needed = SIZE_MAX;
+        assert(qr_detector_scratch_bytes(settings, mode, 0, 116, &needed) == QR_INVALID_CONFIG);
+        assert(needed == SIZE_MAX);
+        assert(qr_detector_scratch_bytes(settings, mode, 116, memory->max_height + 1, &needed) ==
+               QR_INVALID_CONFIG);
+        assert(needed == SIZE_MAX);
+    }
+    assert(qr_detector_scratch_bytes(settings, 1, 116, 116, &needed) == QR_INVALID_CONFIG);
+    assert(needed == SIZE_MAX);
+    assert(qr_detector_scratch_bytes(settings, UINT32_MAX, 116, 116, &needed) == QR_INVALID_CONFIG);
+    assert(needed == SIZE_MAX);
+    assert(qr_detector_scratch_bytes(NULL, QR_MODE_FAST, 116, 116, &needed) == QR_INVALID_ARGUMENT);
+    assert(needed == SIZE_MAX);
+    assert(qr_detector_scratch_bytes(settings, QR_MODE_FAST, 116, 116, NULL) ==
+           QR_INVALID_ARGUMENT);
+    alignas(size_t) unsigned char misaligned[sizeof(size_t) + 1];
+    memset(misaligned, 0xa5, sizeof misaligned);
+    assert(qr_detector_scratch_bytes(settings, QR_MODE_FAST, 116, 116,
+                                     (size_t *)(misaligned + 1)) == QR_INVALID_ARGUMENT);
+    for (size_t i = 0; i < sizeof misaligned; ++i)
+        assert(misaligned[i] == 0xa5);
+    assert(qr_detector_scratch_bytes(settings, QR_MODE_FAST, SIZE_MAX, 116, &needed) ==
+           QR_INVALID_CONFIG);
+    assert(needed == SIZE_MAX);
+    qr_config invalid = *settings;
+    invalid.row_step = 0;
+    assert(qr_detector_scratch_bytes(&invalid, QR_MODE_FAST, 116, 116, &needed) ==
+           QR_INVALID_CONFIG);
+    assert(needed == SIZE_MAX);
+    union {
+        qr_config settings;
+        size_t output;
+    } overlap = {0};
+    overlap.settings = *settings;
+    unsigned char saved[sizeof overlap];
+    memcpy(saved, &overlap, sizeof overlap);
+    assert(qr_detector_scratch_bytes(&overlap.settings, QR_MODE_FAST, 116, 116, &overlap.output) ==
+           QR_OVERLAP);
+    assert(memcmp(saved, &overlap, sizeof overlap) == 0);
+
+    /* Exercise optional storage on an image that actually needs local thresholds. */
+    static uint8_t lighting[360 * 360], expanded[50000];
+    FILE *file = fopen("fixtures/lighting-v2.pgm", "rb");
+    assert(file);
+    unsigned width, height, maximum;
+    assert(fscanf(file, "P5 %u %u %u", &width, &height, &maximum) == 3);
+    assert(width == 360 && height == 360 && maximum == 255 && fgetc(file) == '\n');
+    assert(fread(lighting, 1, sizeof lighting, file) == sizeof lighting);
+    fclose(file);
+    assert(qr_detector_scratch_bytes(settings, QR_MODE_FAST, width, height, &needed) == QR_OK);
+    assert(needed <= sizeof expanded);
+    qr_result result;
+    qr_stats baseline, cached;
+    assert(qr_decode_gray_with_mode(settings, SIZE_MAX, QR_MODE_FAST, QR_SAMPLING_CENTER, lighting,
+                                    sizeof lighting, width, height, width, expanded,
+                                    memory->detector_scratch_bytes, core_scratch,
+                                    sizeof core_scratch, payload, sizeof payload, segments, 16,
+                                    &result, &baseline) == QR_OK);
+    assert(result.payload_len == 4 && memcmp(payload, "TEST", 4) == 0);
+    memset(expanded + needed, 0xa5, sizeof expanded - needed);
+    assert(qr_decode_gray_with_mode(settings, SIZE_MAX, QR_MODE_FAST, QR_SAMPLING_CENTER, lighting,
+                                    sizeof lighting, width, height, width, expanded, needed,
+                                    core_scratch, sizeof core_scratch, payload, sizeof payload,
+                                    segments, 16, &result, &cached) == QR_OK);
+    assert(result.payload_len == 4 && memcmp(payload, "TEST", 4) == 0);
+    /* A refined global threshold can succeed before the local memo is used. */
+    assert(cached.pixel_reads <= baseline.pixel_reads);
+    for (size_t i = needed; i < sizeof expanded; ++i)
+        assert(expanded[i] == 0xa5);
+}
+#endif
 int main(void) {
     struct {
         qr_config config;
@@ -26,6 +108,9 @@ int main(void) {
     assert(memory.segment_alignment == alignof(qr_segment));
     assert(memory.result_size == sizeof(qr_result));
     assert(memory.result_alignment == alignof(qr_result));
+#ifndef QR_TEST_LEGACY_HEADER
+    check_mode_scratch(&config, &memory);
+#endif
     FILE *f = fopen("fixtures/v1.bin", "rb");
     assert(f);
     assert(fread(matrix, 1, sizeof matrix, f) == sizeof matrix);

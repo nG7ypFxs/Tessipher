@@ -1,176 +1,76 @@
 # Tessipher
 
-Tessipher is a QR reader for embedded systems. It decodes sampled module
-matrices or finds a single symbol in a Gray8 image, with QR Model 2 enabled by
-default and Micro QR available through optional features.
+An allocation-free QR reader for embedded Rust and C. The Rust runtime is
+`no_std` with no external dependencies. Decode sampled module matrices or find
+one symbol in a borrowed Gray8 image, using buffers supplied by your application.
+Requires Rust 1.85 or later.
 
-The Rust runtime has no external dependencies, supports `no_std`, and allocates
-nothing on the heap. The caller supplies the image, scratch storage, and output
-buffers, then reuses them across calls.
+## Performance
 
-Requires Rust 1.85 or later. Licensed under MIT OR Apache-2.0; reference test
-code has [separate licenses](THIRD_PARTY.md).
+Choose Direct for lower memory use, or Fast for lower latency. In this host
+comparison, **Fast took 27.9% less decode time than ZXing-C++** on the nine
+images all decoders handled correctly.
+
+| Decoder | Correct images | Common-nine latency (µs) | Accounted memory (KiB) |
+| --- | ---: | ---: | ---: |
+| Tessipher Direct (default) | 12/12 | 160.2 | **20.50** |
+| Tessipher Fast (with optional cache) | 12/12 | **72.5** | 95.70 |
+| quirc 1.2 | 9/12 | 607.3 | 334.45 |
+| ZXing-C++ 3.1.1 | 12/12 | 100.5 | 437.33 |
+
+Measured on macOS arm64 on 2026-10-16 with a development snapshot, release
+builds, Center sampling, 100 calls and 10 warmups per synthetic image. Latency
+is the geometric mean of per-image p50 times over the same nine successful
+inputs. Memory is peak requested heap plus caller-owned scratch and output
+storage across the full corpus; input images, stack, code, static data, and
+allocator overhead are excluded.
+
+See [methods, reproduction commands, and recorded results](docs/benchmarks.md).
+Measure your workload on the target hardware when choosing modes and buffers.
 
 ## Getting started
 
-The Rust package and library are both named `tessipher`. For a crates.io
-release, use this dependency declaration:
-
-```toml
-[dependencies]
-tessipher = "0.1.0"
-```
-
-For development against a local checkout, use a path dependency instead:
-
-```toml
-[dependencies]
-tessipher = { path = "../Tessipher/crates/qr" }
-```
-
-Adjust the path for your project layout. Before the first registry publication,
-use the checkout dependency. To try the repository's host example:
+To use a published crates.io release, run in your project:
 
 ```sh
-git clone https://github.com/nG7ypFxs/Tessipher.git
-cd Tessipher
+cargo add tessipher
+```
+
+To try decoding from the repository root:
+
+```sh
 cargo run -p tessipher --example read_pgm --locked -- fixtures/v1.pgm
 ```
 
-The example prints `payload bytes: [84, 69, 83, 84]`, the bytes for `TEST`.
-Its small file reader accepts binary PGM (`P5`) with a three-line header,
-maximum value `255`, and no comments; it is not a general image-file loader.
+This prints the payload bytes for `TEST`. Follow the [Rust guide](docs/api.md)
+for buffer sizing and decoding, or the [C/firmware guide](docs/ffi.md) to build
+and link the C library.
 
-## Decode an image in Rust
+## Supported formats
 
-A Gray8 image is a borrowed view, so a region of interest can use the original
-frame's stride without copying pixels. This example reads a 640 × 240 region
-from a frame with a 1920-byte stride:
-
-```rust
-use tessipher::{Config, GrayImage, Segment, Detection};
-
-fn decode_roi(
-    frame_roi: &[u8],
-    detector_scratch: &mut [u8],
-    core_scratch: &mut [u8],
-    payload: &mut [u8],
-    segments: &mut [Segment],
-) -> Result<Detection, tessipher::detect::Error> {
-    let config = Config::<640, 240>::default();
-    let image = GrayImage::new(frame_roi, 640, 240, 1920)?;
-    tessipher::decode_gray(image, &config, detector_scratch, core_scratch, payload, segments)
-}
-```
-
-Query storage sizes with `tessipher::memory_requirements(&config)` before allocating.
-With the default configuration, scratch needs are:
-
-| Storage | Bytes |
-| --- | ---: |
-| Core scratch | 7077 |
-| Detector scratch | 4557 |
-| Total | **11634** |
-
-Both scratch regions have alignment 1. Keep them in a task arena or dedicated
-firmware RAM; the API does not require a large owned scratch value on the stack.
-The compile-time width and height limits each default to 640. Finder storage,
-candidate search, sampling attempts, and pixel reads have separate limits; see
-[the detection specification](docs/detection.md) for budgets and recognition limits.
-
-For already sampled modules, use `tessipher::core::Matrix::new(bits, side)` and
-`tessipher::decode_matrix(...)` (also available as `tessipher::core::decode(...)`). Bits are
-packed row-major, most-significant bit first, with no padding between rows.
-Model 2 sides range from 21 to 177 modules (`17 + 4 × version`).
-
-Matrix input can use version-sized scratch: `tessipher::core::scratch_bytes(version)`
-returns 460 bytes for V1 and 7077 for V40. Model 2 image detection and tracking
-need the full 7077 bytes because the version is unknown. Micro QR matrix and
-image decoding need only 184 core bytes, plus detector scratch for images.
-[The API guide](docs/api.md) covers output capacities, errors, and memory contracts.
-
-## Formats and optional features
-
-Model 2 supports versions 1–40, error-correction levels L/M/Q/H, and masks 0–7.
-It decodes Numeric, Alphanumeric, Byte, Kanji, ECI, FNC1 (first and second
-position), and Structured Append modes, including Reed–Solomon correction.
-
-The output is bytes, ready for the application to interpret. Byte mode remains
-raw; Kanji mode returns two-byte Shift_JIS sequences without conversion.
-Segments record their mode, output range, and latest ECI assignment; ECI control
-segments preserve the history. Structured Append returns index, total, and parity
-metadata; the caller joins symbols.
-[FNC1 handling and correction limits](docs/api.md) are documented in the API guide.
+QR Model 2 supports versions 1–40, ECC L/M/Q/H, and Numeric, Alphanumeric,
+Byte, Kanji, ECI, FNC1, and Structured Append modes. Micro QR M1–M4 is optional.
 
 | Cargo feature | Effect |
 | --- | --- |
-| `detect` (default) | Adds Model 2 Gray8 image detection through `tessipher::detect` |
-| `micro-qr` | Adds Micro QR M1–M4 matrix decoding |
-| `micro-qr-detect` | Adds Micro QR Gray8 detection; enables `detect` and `micro-qr` |
+| `detect` (default) | Model 2 Gray8 image detection |
+| `micro-qr` | Micro QR matrix decoding |
+| `micro-qr-detect` | Micro QR image detection; enables `detect` and `micro-qr` |
 
-Use `default-features = false` for matrix-only builds. For Micro QR, call
-`tessipher::MicroMatrix::new(bits, side)` with `tessipher::decode_micro_matrix(...)`, or use
-`tessipher::decode_micro_gray(...)` for images. Micro QR supports all legal error-correction
-levels, masks 0–3, and Numeric, Alphanumeric, Byte, and Kanji modes. Its quiet
-zone is two modules wide.
+Use `default-features = false` for matrix-only builds. Output is bytes:
+Byte mode stays raw and Kanji mode returns Shift_JIS. Text conversion,
+Structured Append reassembly, camera capture, and image-file loading belong
+to the application. Image detection returns at most one symbol.
 
-Image detection returns at most one symbol. rMQR, Model 1, multiple-symbol
-results, character-set conversion, camera control, and image-file loading are
-outside the public library's scope.
+## Guides
 
-Rust image calls use center sampling by default. To retry failed center samples
-with five-point voting, use `tessipher::decode_gray_with_sampling` and
-`SamplingStrategy::CenterThenMajority5`. `tessipher::Tracker` can reuse a recent symbol's
-region across frames, falling back to a full-image search when needed. It retains
-no image, scratch, or payload between calls. See [the API guide](docs/api.md) for
-usage and [the detection specification](docs/detection.md) for state transitions.
+- [Rust integration](docs/api.md): storage, results, tuning, and tracking.
+- [C and firmware integration](docs/ffi.md): builds, headers, and call contracts.
+- [Development](docs/development.md): checks, Zephyr/QEMU, and releases.
 
-## Use from C
+For the complete Rust API reference, run
+`cargo doc -p tessipher --all-features --no-deps --locked --open`.
+Release notes are on [GitHub Releases](https://github.com/nG7ypFxs/Tessipher/releases).
 
-The repository-only `tessipher-ffi` crate provides an allocator-free C ABI.
-Build the host static library and run the C checks from the repository root:
-
-```sh
-cargo build -p tessipher-ffi --release --locked
-uv run tools/c_smoke.py
-```
-
-Include [tessipher.h](include/tessipher.h) and link `target/release/libqr_ffi.a`.
-Call `qr_default_config` and `qr_memory`, allocate the queried storage, then use
-`qr_decode_matrix` for packed modules or `qr_decode_gray` for Gray8 pixels.
-Read payload and segment prefixes only after `QR_OK`.
-
-For Micro QR, build with `--features micro-qr` or `--features micro-qr-detect` and
-use the header generated by that same build. Call `qr_micro_memory` before a
-matching `qr_decode_micro_*` entry point. [C integration](docs/ffi.md) explains
-feature guards, header generation, pointer contracts, and firmware builds.
-The [C example](examples/c_decode.c) decodes a fixture; the
-[Zephyr/QEMU example](docs/zephyr.md) runs the ABI on a Cortex-M3.
-
-C Gray8 calls default to center-then-majority-five sampling. Select
-`QR_SAMPLING_CENTER` with `qr_decode_gray_with_sampling` when preserving center
-sampling or working with tight retry/read budgets. C tracking is explicit,
-through `qr_tracker_init` and `qr_tracker_decode_gray`. Sampling and tracking
-preserve existing ABI-1 layouts. The [sampling guide](docs/ffi.md#sampling-default-explicit-counters-and-tracking)
-explains budget consumption and the extra work on long failures.
-
-## Documentation
-
-The [GitHub Releases](https://github.com/nG7ypFxs/Tessipher/releases) include
-release notes and a generated `CHANGELOG.md` grouped from Conventional Commits.
-The [user guides](docs/README.md) cover Rust APIs and memory, image detection
-and tuning, C integration, and the Zephyr/QEMU example.
-Generate the complete Rust API reference with:
-
-```sh
-cargo doc --workspace --all-features --no-deps --locked
-```
-
-Contributor checks, benchmark usage, and release
-procedures are in [development documentation](development/README.md).
-
-The standards reviewed for this project are ISO/IEC 18004:2024 and
-JIS X 0510:2026. It has not undergone certification testing against the entire
-standard and makes no
-certification claim. Standards references: [ISO](https://www.iso.org/standard/83389.html)
-and [Japanese Standards Association](https://webdesk.jsa.or.jp/books/W11M0090/index/?bunsyo_id=JIS+X+0510%3A2026).
+Licensed under MIT OR Apache-2.0. See [third-party notices](THIRD_PARTY.md)
+for reference-code licenses.

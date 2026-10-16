@@ -51,10 +51,11 @@ pub use core::{
 
 #[cfg(feature = "detect")]
 pub use detect::{
-    decode as decode_gray, decode_with_sampling as decode_gray_with_sampling,
+    decode as decode_gray, decode_with_mode as decode_gray_with_mode,
+    decode_with_sampling as decode_gray_with_sampling,
     decode_with_sampling_cached as decode_gray_with_sampling_cached,
-    decode_with_stats as decode_gray_with_stats, Config, DefaultConfig, Detection, GrayImage, Rect,
-    SamplingStrategy, Stats, TrackHint, Tracker, TrackerState, TrackerStats,
+    decode_with_stats as decode_gray_with_stats, Config, DefaultConfig, Detection, DetectionMode,
+    GrayImage, Rect, SamplingStrategy, Stats, TrackHint, Tracker, TrackerState, TrackerStats,
 };
 #[cfg(all(feature = "detect", feature = "micro-qr-detect"))]
 pub use detect::{
@@ -63,7 +64,8 @@ pub use detect::{
     decode_micro_with_stats as decode_micro_gray_with_stats, MicroDetection,
 };
 
-/// Scratch requirements are independent of configured image dimensions.
+/// Minimum scratch requirements, independent of configured image dimensions.
+/// Optional Fast storage is queried with [`Config::scratch_bytes_for_mode`].
 #[cfg(feature = "detect")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryRequirements {

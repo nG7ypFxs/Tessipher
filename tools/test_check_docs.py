@@ -32,7 +32,22 @@ class DocumentationChecks(unittest.TestCase):
         self.write("source.txt", "text\n")
         self.assertEqual(markdown_files(self.root), [untracked, tracked])
         tracked.unlink()
+        self.assertEqual(markdown_files(self.root), [untracked])
         self.assertIn("missing tracked Markdown file", check_links([tracked], self.root)[0])
+
+    def test_unstaged_rename_keeps_link_validation(self):
+        old = self.write("old.md", "# Target\n")
+        source = self.write("source.md", "# Source\n\n[target](old.md#target)\n")
+        subprocess.run(["git", "add", "old.md", "source.md"], cwd=self.root, check=True)
+        new = old.rename(self.root / "renamed.md")
+
+        paths = markdown_files(self.root)
+        self.assertEqual(paths, [new, source])
+        self.assertEqual(check_links(paths, self.root),
+                         ["source.md:3: missing local target: old.md#target"])
+
+        source.write_text("# Source\n\n[target](renamed.md#target)\n", encoding="utf-8")
+        self.assertEqual(check_links(paths, self.root), [])
 
     def test_valid_references_images_and_nested_paths(self):
         self.write("docs/target space.md", "# Target `API`, 世界!\n")

@@ -3,7 +3,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["clang-format==20.1.8"]
 # ///
-"""Check or format repository-owned C sources and headers with pinned clang-format."""
+"""Check or format repository-owned C/C++ sources and headers with pinned clang-format."""
 
 import argparse
 import os
@@ -57,7 +57,7 @@ def owned_files():
         {
             ROOT / name
             for name in names
-            if pathlib.Path(name).suffix in {".c", ".h"}
+            if pathlib.Path(name).suffix in {".c", ".cpp", ".h"}
             and not excluded.intersection(pathlib.Path(name).parts)
             and (ROOT / name).is_file()
         }

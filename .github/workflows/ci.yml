@@ -54,6 +54,13 @@ jobs:
       - run: uv run tools/c_smoke.py
       - run: python3 tools/c_micro.py
       - run: python3 tools/cross_decode.py
+      - run: python3 -m unittest discover -s tools -p test_decoder_bench.py
+      - name: Test benchmark allocation probe
+        run: |
+          c++ -std=c++20 -O2 -DNDEBUG -Wall -Wextra -Werror \
+            tools/decoder_bench/heap_probe.cpp tools/decoder_bench/heap_probe_test.cpp \
+            -o target/heap-probe-test
+          target/heap-probe-test
       - run: cargo run -p tessipher --example fuzz_smoke --release
       - run: cargo run -p tessipher --example bench --release
       - run: python3 tools/generate_fixtures.py && git diff --exit-code -- fixtures/
@@ -98,6 +105,11 @@ jobs:
           export PATH="$RUNNER_TEMP/zephyr-venv/bin:$PATH"
           python -m pip install west cmake ninja
           git clone --depth 1 --branch v4.4.2 https://github.com/zephyrproject-rtos/zephyr.git "$RUNNER_TEMP/zephyr-workspace/zephyr"
+          zephyr_head=$(git -C "$RUNNER_TEMP/zephyr-workspace/zephyr" rev-parse HEAD) || exit 1
+          if [ "$zephyr_head" != dccb09599635bdff17633fa7e9dab014b91dce90 ]; then
+            echo "Unexpected Zephyr commit; refusing dependency installation" >&2
+            exit 1
+          fi
           west init -l "$RUNNER_TEMP/zephyr-workspace/zephyr"
           (cd "$RUNNER_TEMP/zephyr-workspace" && west update cmsis cmsis_6)
           python -m pip install \

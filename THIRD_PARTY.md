@@ -41,6 +41,13 @@ Retrieved 2026-10-07; hashes are in `tools/vendor/SHA256SUMS`.
 They are compiled only by `tools/cross_decode.py` for an independent decoder cross-check.
 Each source file retains its original notice; the common license is reproduced below.
 
+The separate host benchmark `tools/decoder_bench.py` fetches the complete quirc
+1.2 source at commit `542848dd6b9b0eaa9587bbf25b9bc67bd8a71fca` from
+<https://github.com/dlbeer/quirc> and compiles its image detection and decoding
+implementation into the benchmark executable. This checkout retains the
+upstream ISC `LICENSE` and source notices. It is not included in Rust runtime
+crate distributions or linked into their runtime archives.
+
 Copyright (C) 2010-2012 Daniel Beer <dlbeer@gmail.com>
 
 Permission to use, copy, modify, and/or distribute this software for any
@@ -54,6 +61,18 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+## ZXing-C++ 3.1.1 (Apache-2.0; bundled notices)
+
+Source: <https://github.com/zxing-cpp/zxing-cpp/tree/287c85df6f961c8efbfb5ffd736cd9457b8b890e>
+`tools/decoder_bench.py` fetches this pinned commit for the host-only decoder
+comparison. Its reader library is compiled into the benchmark executable;
+writers, examples, tests, and optional dependency fetching are disabled.
+The fetched checkout retains its upstream `LICENSE` and per-file notices,
+including the BSD-3-Clause libzueci sources and their embedded notices.
+Its source and binaries are not bundled in Rust runtime crate distributions or
+linked into their runtime archives. The Apache-2.0 license text is also
+available in this repository's `LICENSE-APACHE`.
 
 ## Segno 1.6.6 (BSD-3-Clause)
 

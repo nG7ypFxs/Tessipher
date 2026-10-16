@@ -158,7 +158,7 @@ typedef struct qr_stats {
     size_t candidates;
     /* Sampling attempts, including fallback; core transpose adds no attempt. */
     size_t retries;
-    /* Threshold/polarity passes (up to 4 stateless, 8 tracked). */
+    /* Threshold/polarity passes (Direct: up to 4 stateless, 8 tracked; Fast: up to 16/32). */
     size_t passes;
 } qr_stats;
 /* Target layout query for the new tracker and stats; ABI-1 memory layout is unchanged. */
@@ -401,7 +401,8 @@ int32_t qr_decode_gray(const qr_config *config, const uint8_t *pixels, size_t pi
 /* Same pointer, buffer, result and error contract as qr_decode_gray.
  * max_pixel_reads is 1..SIZE_MAX; zero returns QR_INVALID_CONFIG.
  * Every actual input read, including min/max, repeats and all passes, is charged.
- * Local threshold decisions cost 26 reads, including clamped duplicate samples.
+ * Direct reuses summaries for local row scans; uncached local decisions cost
+ * 26 reads, including clamped duplicate samples.
  * Returns QR_PIXEL_BUDGET before another read would exceed the limit.
  * The limit bounds pixel work, not total cycles or caller-buffer initialization.
  * The ABI-1 qr_config/qr_result/qr_memory_info layouts are unchanged. */
@@ -421,6 +422,28 @@ enum qr_sampling_strategy {
     QR_SAMPLING_CENTER_THEN_MAJORITY5 = 1,
     QR_DEFAULT_SAMPLING_STRATEGY = QR_SAMPLING_CENTER_THEN_MAJORITY5
 };
+/* Modes affect Model 2 Gray8 detection only. All accept qr_memory minimum scratch;
+ * Fast can use additional caller RAM reported by qr_detector_scratch_bytes.
+ * Non-cached entry points default to Direct. Five-row cached APIs retain their
+ * dedicated cache path and do not select a mode.
+ * Fast tries coarse scanning before
+ * full scanning and can select a different first symbol in multi-symbol images.
+ * Mode arguments use uint32_t; other values (including retired value 1)
+ * return QR_INVALID_CONFIG before
+ * modifying buffers, stats, result, or tracker. */
+enum qr_detection_mode {
+    QR_MODE_DIRECT = 0,
+    QR_MODE_FAST = 2,
+    QR_DEFAULT_DETECTION_MODE = QR_MODE_DIRECT
+};
+/* Recommended byte-aligned detector scratch for the mode and image dimensions.
+ * Direct returns qr_memory's minimum; Fast adds ceil(width*height/4)
+ * bytes for local-threshold memoization. Minimum-sized Fast buffers remain valid.
+ * Config and out must be live, aligned, disjoint allocations. Writes out only on
+ * success. Invalid modes, dimensions or config return QR_INVALID_CONFIG.
+ * Pointer/overlap errors follow qr_memory. */
+int32_t qr_detector_scratch_bytes(const qr_config *config, uint32_t mode, size_t width,
+                                  size_t height, size_t *out);
 enum qr_tracker_tag {
     QR_TRACKER_SEARCHING = 0,
     QR_TRACKER_CANDIDATE = 1,
@@ -464,6 +487,26 @@ int32_t qr_tracker_decode_gray(qr_tracker *tracker, const qr_config *config, siz
                                uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload,
                                size_t payload_len, qr_segment *segments, size_t segment_capacity,
                                qr_result *result, qr_stats *stats);
+
+/* Explicit mode variants accept qr_memory minimum scratch and the same pointer, budget,
+ * sampling, stats, and tracker-state contracts as their mode-unspecified counterparts.
+ * qr_detector_scratch_bytes recommends additional Fast scratch for memoization.
+ * Direct reuses detector scratch; Fast tries coarse scanning and nearby global thresholds.
+ * Each added threshold pass probes at most two matrix samplings within shared budgets.
+ * Stats.passes is at most 16 stateless or 32 tracked in Fast mode. */
+int32_t qr_decode_gray_with_mode(const qr_config *config, size_t max_pixel_reads, uint32_t mode,
+                                 uint32_t strategy, const uint8_t *pixels, size_t pixels_len,
+                                 size_t width, size_t height, size_t stride,
+                                 uint8_t *detector_scratch, size_t detector_scratch_len,
+                                 uint8_t *core_scratch, size_t core_scratch_len, uint8_t *payload,
+                                 size_t payload_len, qr_segment *segments, size_t segment_capacity,
+                                 qr_result *result, qr_stats *stats);
+int32_t qr_tracker_decode_gray_with_mode(
+    qr_tracker *tracker, const qr_config *config, size_t max_pixel_reads, uint32_t mode,
+    uint32_t strategy, const uint8_t *pixels, size_t pixels_len, size_t width, size_t height,
+    size_t stride, uint8_t *detector_scratch, size_t detector_scratch_len, uint8_t *core_scratch,
+    size_t core_scratch_len, uint8_t *payload, size_t payload_len, qr_segment *segments,
+    size_t segment_capacity, qr_result *result, qr_stats *stats);
 
 /* Optional five-row local Gray8 cache in caller-owned internal RAM (alignment 1).
  * Invalid config, zero width or width over compiled maximum returns QR_INVALID_CONFIG.

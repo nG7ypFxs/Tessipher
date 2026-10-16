@@ -30,7 +30,7 @@ class PackageChecks(unittest.TestCase):
             "THIRD_PARTY.md": "Project Nayuki QR Code generator (MIT)",
             "build.rs": "",
             "src/lib.rs": "",
-            "src/core/mod.rs": "",
+            "src/core.rs": "",
             "src/core/tables.rs": "",
             "src/detect.rs": "",
         }

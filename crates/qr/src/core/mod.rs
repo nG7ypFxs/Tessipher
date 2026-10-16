@@ -375,14 +375,19 @@ fn decode_oriented(
         if right == 6 {
             right -= 1;
         }
+        let x_bands = [
+            geometry.alignment_band(right),
+            geometry.alignment_band(right - 1),
+        ];
         for row in 0..matrix.matrix.side {
             let y = if upwards {
                 matrix.matrix.side - 1 - row
             } else {
                 row
             };
-            for x in [right, right - 1] {
-                if !geometry.is_function(x, y) {
+            let functions = geometry.function_pair(right, y, x_bands);
+            for (column, x) in [right, right - 1].into_iter().enumerate() {
+                if !functions[column] {
                     if bit < total * 8 && (matrix.bit(x, y) ^ mask_bit(mask, x, y)) {
                         raw[bit / 8] |= 0x80 >> (bit % 8);
                     }
@@ -578,6 +583,31 @@ impl VersionGeometry {
             alignment,
             alignment_count,
         }
+    }
+
+    // Zero means no alignment band; 1..=7 identify the non-overlapping bands.
+    fn alignment_band(&self, coordinate: usize) -> u8 {
+        self.alignment[..self.alignment_count]
+            .iter()
+            .position(|&center| coordinate.abs_diff(center as usize) <= 2)
+            .map_or(0, |index| index as u8 + 1)
+    }
+    fn function_pair(&self, right: usize, y: usize, x_bands: [u8; 2]) -> [bool; 2] {
+        let by = self.alignment_band(y);
+        let last = self.alignment_count as u8;
+        core::array::from_fn(|i| {
+            let x = right - i;
+            let bx = x_bands[i];
+            (x < 9 && (y < 9 || y >= self.side - 8))
+                || (y < 9 && x >= self.side - 8)
+                || x == 6
+                || y == 6
+                || (self.version >= 7
+                    && ((y < 6 && x >= self.side - 11) || (x < 6 && y >= self.side - 11)))
+                || (bx != 0
+                    && by != 0
+                    && !((bx == 1 && (by == 1 || by == last)) || (by == 1 && bx == last)))
+        })
     }
 
     fn is_function(&self, x: usize, y: usize) -> bool {
@@ -889,6 +919,33 @@ mod scratch_tests {
                 assert!(data <= maximum);
             }
             assert!(scratch_bytes(version).unwrap() <= SCRATCH_BYTES);
+        }
+    }
+}
+
+#[cfg(test)]
+mod pair_geometry_tests {
+    use super::*;
+    #[test]
+    fn two_column_geometry_matches_scalar_for_every_version_and_position() {
+        for version in 1..=40 {
+            let geometry = VersionGeometry::new(version);
+            for right in 1..geometry.side {
+                let bands = [
+                    geometry.alignment_band(right),
+                    geometry.alignment_band(right - 1),
+                ];
+                for y in 0..geometry.side {
+                    assert_eq!(
+                        geometry.function_pair(right, y, bands),
+                        [
+                            geometry.is_function(right, y),
+                            geometry.is_function(right - 1, y)
+                        ],
+                        "version={version} x={right} y={y}"
+                    );
+                }
+            }
         }
     }
 }

@@ -1,52 +1,18 @@
-# C integration and embedded builds
+# Using Tessipher from C or firmware
 
-## Building and headers
+For C/C++ and embedded developers integrating the repository-only
+`tessipher-ffi` crate. It returns one symbol per call and uses caller-owned
+storage. Run the following commands from the repository root.
 
-Build the repository-only `tessipher-ffi` crate with Rust/Cargo. Ordinary builds
-generate a matching C header without requiring clang-format. Optional header
-validation and host smoke tests use
-[uv](https://docs.astral.sh/uv/getting-started/installation/), which installs
-their pinned formatter automatically.
+## Build and try the example
 
 ```sh
-# Static library for host C tests
 cargo build -p tessipher-ffi --release --locked
-uv run tools/check_header.py
-uv run tools/c_smoke.py
-python3 tools/c_micro.py
-
-# Optional Micro QR C archives
-cargo build -p tessipher-ffi --release --features micro-qr --locked
-cargo build -p tessipher-ffi --release --features micro-qr-detect --locked
-
-# Cortex-M0 core and Cortex-M4 soft-float C library
-rustup target add thumbv6m-none-eabi thumbv7em-none-eabi
-cargo build -p tessipher --no-default-features --target thumbv6m-none-eabi --release
-cargo build -p tessipher-ffi --no-default-features --target thumbv7em-none-eabi --release
-cargo build -p tessipher-ffi --no-default-features --features micro-qr \
-  --target thumbv7em-none-eabi --release
-cargo build -p tessipher-ffi --no-default-features --features micro-qr-detect \
-  --target thumbv7em-none-eabi --release
 ```
 
-Run the commands from the repository root. The host build produces
-`target/release/libqr_ffi.a`; include [tessipher.h](../include/tessipher.h) in C or
-C++ (`extern "C"` is provided). No Rust headers or runtime initialization calls
-are needed. Use the generated header with the corresponding library build.
-
-The complete [C example](../examples/c_decode.c) loads the repository's packed
-Version-1 fixture, queries storage, decodes it, and prints `TEST` and its segment.
-It includes allocation failure handling and cleanup; the decoder itself allocates
-nothing. Compile and run it on macOS with:
-
-```sh
-cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_decode.c \
-  target/release/libqr_ffi.a -lpthread -lm \
-  -framework Security -framework CoreFoundation -liconv -o target/c-decode
-./target/c-decode
-```
-
-On Linux, replace the framework and iconv arguments with `-ldl`:
+Include [tessipher.h](../include/tessipher.h) and link
+`target/release/libqr_ffi.a`. The [C example](../examples/c_decode.c) decodes the
+packed fixture and prints `TEST`. On Linux:
 
 ```sh
 cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_decode.c \
@@ -54,448 +20,123 @@ cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_decode.c \
 ./target/c-decode
 ```
 
-These host link arguments follow [tools/c_smoke.py](../tools/c_smoke.py).
-If `CARGO_TARGET_DIR` is set, replace `target` with that directory in the library
-and executable paths; a relative value is resolved from the repository root.
-Cross builds put the archive under
-`target/<target-triple>/release/libqr_ffi.a` (or the corresponding custom target
-directory). Firmware linking uses the board's linker script and target toolchain,
-not these host system libraries. Physical MCU integration has not been validated.
-For a Zephyr RTOS execution check, see [Zephyr and QEMU](zephyr.md).
+On macOS, replace `-ldl` with
+`-framework Security -framework CoreFoundation -liconv`.
+If `CARGO_TARGET_DIR` is set, adjust the library and executable paths.
 
-The default `host` feature of `tessipher-ffi` links std for host staticlib tests.
-Use `--no-default-features --release` for firmware.
-The no-host staticlib includes a panic handler that loops indefinitely if a panic occurs and does not unwind into C.
-Linking this rlib alongside another Rust panic handler is not an intended use.
-For direct use from Rust firmware, depend on the `tessipher` package and use its
-`tessipher` library instead.
-
-The `QR_MAX_WIDTH` and `QR_MAX_HEIGHT` environment variables independently set the C ABI's compile-time image limits, each in 1–32768 and defaulting to 640.
-For example: `QR_MAX_WIDTH=640 QR_MAX_HEIGHT=240 cargo build -p tessipher-ffi --release`.
-The header does not hard-code dimensions; `qr_memory` returns the limits of the library actually linked.
-The C ABI version is 1, and the maximum module-matrix side is 177.
-
-For the default feature set, the generated and distributed headers have the same
-declarations; their whitespace differs before formatting. Optional-feature
-headers change the feature macro values, which expose the matching guarded
-declarations.
-
-Micro QR declarations and symbols follow the `tessipher-ffi` Cargo features. Every
-generated header defines `QR_HAS_MICRO_QR` and `QR_HAS_MICRO_QR_DETECT` as 0 or
-1 for its archive. `micro-qr-detect` also sets the matrix macro. These are
-numeric macros: use `#if QR_HAS_MICRO_QR`, not `#ifdef QR_HAS_MICRO_QR`, because
-the latter is also true when the value is 0. A contradictory pair with detection
-enabled and matrix decoding disabled is rejected by the header.
-
-The distributed header describes the default archive and sets both macros to 0.
-For an optional-feature archive, use its `OUT_DIR/tessipher.h`, or define the
-same 0/1 macro values before including the distributed header. Header macros and
-the linked archive must come from the same Cargo feature set. The additive Micro
-types remain declared for layout and shared-schema stability, while functions
-are visible only inside their matching `#if` blocks.
-
-### Exporting a matching header and archive
-
-Use Cargo's JSON messages to identify the header and static archive produced by
-the same build. Normal `cargo build` output does not print `OUT_DIR`, and a glob
-such as `build/tessipher-ffi-*/out/tessipher.h` can match stale headers from other
-features or targets.
-
-This example exports a host archive with Micro QR matrix and image support into
-`target/ffi-micro-detect`. Run it from the repository root with Python 3.10 or
-later:
+For firmware, disable the default `host` feature and select your Rust target:
 
 ```sh
-mkdir -p target/ffi-micro-detect
+rustup target add thumbv7em-none-eabi
+cargo build -p tessipher-ffi --no-default-features --release --locked \
+  --target thumbv7em-none-eabi
+```
+
+Link `target/thumbv7em-none-eabi/release/libqr_ffi.a` with your board's toolchain
+and linker script. The firmware archive has a panic handler that loops without
+unwinding; do not combine it with another Rust panic handler. Rust firmware
+should depend directly on `tessipher`. See [Zephyr/QEMU](development.md#zephyrqemu)
+for an execution example; physical MCU timing and stack usage require target measurements.
+
+`QR_MAX_WIDTH` and `QR_MAX_HEIGHT` environment variables set image limits at
+build time (each 1–32768, default 640). Query the linked limits with `qr_memory`.
+
+## Exporting a matching header and archive
+
+The checked-in header matches the default feature set. For Micro QR, enable
+`micro-qr` (matrices) or `micro-qr-detect` (matrices and images), and use the
+header generated by that same build. `QR_HAS_MICRO_QR` and
+`QR_HAS_MICRO_QR_DETECT` are numeric macros: test them with `#if`, not `#ifdef`.
+
+This exports a host Micro QR build. Cargo JSON identifies the matching paths;
+globbing build directories can select stale headers from other configurations.
+
+```sh
+mkdir -p target/ffi-export
 cargo build -p tessipher-ffi --release --locked --features micro-qr-detect \
-  --message-format=json > target/ffi-micro-detect/build.json
+  --message-format=json > target/ffi-export/build.json
 python3 - <<'PY'
 import json
 from pathlib import Path
 import shutil
 
-output = Path("target/ffi-micro-detect")
-records = [json.loads(line) for line in (output / "build.json").read_text().splitlines()]
-headers = [Path(record["out_dir"]) / "tessipher.h" for record in records
-           if record["reason"] == "build-script-executed"
-           and "tessipher-ffi" in record["package_id"]]
-archives = [Path(name) for record in records
-            if record["reason"] == "compiler-artifact"
-            and record["target"]["name"] == "qr_ffi"
-            for name in record["filenames"] if name.endswith((".a", ".lib"))]
+out = Path("target/ffi-export")
+records = [json.loads(line) for line in (out / "build.json").read_text().splitlines()]
+headers = [Path(r["out_dir"]) / "tessipher.h" for r in records
+           if r["reason"] == "build-script-executed" and "tessipher-ffi" in r["package_id"]]
+archives = [Path(p) for r in records if r["reason"] == "compiler-artifact"
+            and r["target"]["name"] == "qr_ffi"
+            for p in r["filenames"] if p.endswith((".a", ".lib"))]
 if len(headers) != 1 or len(archives) != 1:
-    raise SystemExit("Expected one Tessipher FFI header and one static archive")
-shutil.copy2(headers[0], output / "tessipher.h")
-shutil.copy2(archives[0], output / archives[0].name)
-print(f"Exported {headers[0].name} and {archives[0].name} to {output}")
+    raise SystemExit("Expected one matching header and archive")
+for path in (headers[0], archives[0]):
+    shutil.copy2(path, out / path.name)
 PY
 ```
 
-Compile consumers with `-Itarget/ffi-micro-detect` and link the archive exported
-there (`libqr_ffi.a` on the documented Unix and Cortex targets). The raw generated
-header is valid C and C++; exporting it does not require clang-format.
+Compile with `-Itarget/ffi-export` and link the exported archive. For firmware,
+add `--no-default-features --target <target-triple>` to the Cargo command.
+Use a separate export directory for each configuration.
 
-For a matrix-only Micro QR archive, change the feature to `micro-qr` and use a
-different export directory. For firmware, also add `--no-default-features` and
-`--target <target-triple>` to the Cargo command after installing that Rust target.
-The JSON identifies the correct paths even when `CARGO_TARGET_DIR` is set. The
-export directory is independent of that setting; update its path in both commands
-when exporting another variant. Keep each header with its matching archive.
+## Call sequence and storage
 
-## Choosing an entry point
+1. Call `qr_default_config`, check `QR_OK`, and adjust configuration as needed.
+2. Call `qr_memory`; use its output only after `QR_OK`.
+3. Provide separate aligned core, detector, payload, segment, and result storage.
+4. Call the decoder with actual buffer capacities.
+5. After `QR_OK`, consume `result.payload_len` bytes and `result.segment_count`
+   entries before reusing the buffers.
 
-All functions return an `int32_t` status; compare it with `QR_OK`, not with a
-payload length. The public API decodes at most one symbol per call.
-
-| Function | Use |
+| Input or workflow | Entry point / query |
 | --- | --- |
-| `qr_default_config` | Write valid default finder/candidate/retry/scan/threshold settings. |
-| `qr_memory` | Validate configuration and query the linked image limits, buffer sizes, and target layouts. |
-| `qr_decode_matrix` | Decode already sampled packed modules; no detector scratch or config argument. |
-| `qr_micro_memory` | With `QR_HAS_MICRO_QR`, query Micro QR limits, scratch sizes, and additive layouts. |
-| `qr_decode_micro_matrix` | With `QR_HAS_MICRO_QR`, decode packed M1–M4 modules. |
-| `qr_decode_micro_gray` | With `QR_HAS_MICRO_QR_DETECT`, detect/decode Micro QR with default budget/sampling. |
-| `qr_decode_micro_gray_with_budget` | Micro QR Gray8 with an explicit pixel-read limit. |
-| `qr_decode_micro_gray_with_sampling` | Micro QR Gray8 with explicit sampling and optional `qr_stats`. |
-| `qr_decode_gray` | Decode a Gray8 image with default sampling and 64,000,000 pixel reads. |
-| `qr_decode_gray_with_budget` | Gray8 with an explicit pixel-read limit. |
-| `qr_decode_gray_with_sampling` | Gray8 with explicit pixel limit and sampling strategy, and optional `qr_stats`. |
-| `qr_local_cache_memory` | Query optional five-row cache size for a validated width. |
-| `qr_decode_gray_with_sampling_cached` | Model 2 Gray8 with optional internal-RAM row cache. |
-| `qr_tracker_decode_gray_cached` | Tracked Model 2 Gray8 with caller-owned row cache. |
-| `qr_tracker_memory` | Query target sizes/alignment for `qr_tracker` and `qr_stats`. |
-| `qr_tracker_init` / `qr_tracker_reset` | Initialize state or discard a saved tracking hint. |
-| `qr_tracker_decode_gray` | Decode successive frames using caller-owned tracking, explicit budget/strategy, and optional stats. |
+| Packed Model 2 matrix | `qr_decode_matrix`; `qr_matrix_scratch_bytes` for a known version |
+| Gray8 image | `qr_decode_gray`; full core and detector scratch from `qr_memory` |
+| Explicit mode, sampling, and pixel budget | `qr_decode_gray_with_mode`; `qr_detector_scratch_bytes` for Fast storage |
+| Successive Model 2 frames | `qr_tracker_init`, then `qr_tracker_decode_gray_with_mode` |
+| Micro QR matrix or image | `qr_decode_micro_matrix` / `qr_decode_micro_gray`; separate `qr_micro_memory` query |
 
-## Calling sequence and storage
+Static storage, arenas, and heap allocations all work. Re-query sizes after
+configuration changes. Smaller payload/segment buffers are allowed, but may
+return `QR_OUTPUT_TOO_SMALL` or `QR_SEGMENTS_TOO_SMALL`. Segment capacity must
+not exceed the queried maximum (5912 for Model 2, 16 for Micro QR).
 
-1. Call `qr_default_config`, check `QR_OK`, and adjust settings if needed.
-2. Call `qr_memory` and check `QR_OK` before using its output.
-3. Allocate separate regions with the returned sizes and alignment.
-4. Call the chosen decode function with capacities, not expected output lengths.
-5. Only after `QR_OK`, read `result.payload_len` bytes and
-   `result.segment_count` segment entries.
-6. Reuse the same allocations for later calls; read or copy a successful payload
-   before the next call overwrites it.
+## Input and pointer contracts
 
-The complete [examples/c_decode.c](../examples/c_decode.c) implements these steps
-for matrix input. For Gray8, also allocate `memory.detector_scratch_bytes` bytes
-and pass it separately from core scratch. Typed C objects naturally provide
-alignment for result/config/segments; `malloc` provides the required alignment
-for the example's allocations. If using an arena, align each typed region and
-keep all regions disjoint. Do not use a packed struct as storage for ABI objects.
+Gray8 pixels are luminance bytes (0 black, 255 white), with nonzero dimensions,
+`stride >= width`, and at least `(height - 1) * stride + width` accessible bytes.
+For an ROI, offset the pixel pointer to its top-left and retain the parent stride;
+keep the span inside the allocation. Include the quiet zone. Corners are relative
+to the supplied view, including when a tracker internally searches a smaller ROI.
 
-| Storage | Capacity from `qr_memory` | Notes |
-| --- | --- | --- |
-| Core scratch | `core_scratch_bytes` (7077) | Required for Gray8; matrix input can use `qr_matrix_scratch_bytes(version, &size)`. |
-| Detector scratch | `detector_scratch_bytes` (4557 at default config) | Gray8 only; changes with finder capacity. |
-| Payload bytes | `max_payload_bytes` (7089) | Conservative maximum; no extra terminator byte required by the API. |
-| Segment array | `max_segments` (5912 entries) | Multiply by `segment_size`, with overflow checking for a generic allocator. |
-| Result object | `result_size`, `result_alignment` | One `qr_result`; written only on success. |
+Matrix bits are row-major, MSB-first, black = 1, with no row padding or quiet zone.
+Model 2 sides are 21–177; finders must be at top-left, top-right, and bottom-left.
+Micro QR sides are 11/13/15/17 and support rotations and reflections.
 
-The maximum output allocations suffice for all supported payloads. Smaller
-application capacities are allowed but may return `QR_OUTPUT_TOO_SMALL` or
-`QR_SEGMENTS_TOO_SMALL`; partial output must not be consumed. Passing a segment
-capacity above `max_segments` is invalid even if the allocation is larger.
-A NULL pointer with zero capacity is a valid empty byte/segment span, not a way
-to request omitted payload or segment output. Stats are the optional decode output.
-Query memory again after changing configuration, especially `max_finders`, and
-resize storage as needed before decoding. Matrix input does not need detector
-storage, but querying memory still provides core/output/layout requirements.
+Every pointer/span must fit one live allocation and meet its type's alignment.
+All nonempty regions, including inputs and configuration, must be mutually
+disjoint. Inputs must remain initialized and unchanged; writable regions require
+exclusive access during the call, including against DMA or interrupt handlers.
+NULL is allowed only for zero-length byte/segment spans and optional stats;
+mandatory configuration, result, and query-output pointers must be valid.
+The FFI checks numeric bounds, alignment, and overlap, but cannot verify an
+arbitrary pointer's allocation or lifetime. Do not use packed structs as ABI storage.
 
-With `QR_HAS_MICRO_QR`, call `qr_micro_memory` for the separate Micro QR
-contract. Matrix scratch is 184 bytes, maximum payload is 35 bytes, and the
-conservative segment capacity is 16. When the archive lacks
-`micro-qr-detect`, `image_core_scratch_bytes` and `detector_scratch_bytes` are
-zero. A detection-enabled default configuration reports 184 image-core bytes
-and 4557 detector bytes. The query also reports the target size and alignment
-of `qr_micro_result`, `qr_segment`, and `qr_stats`. These values are separate
-from the unchanged ABI-1 `qr_memory_info` layout.
+Payload is bytes, not a NUL-terminated string. Use returned lengths; interpret
+encoding and control metadata as described in the [Rust guide](api.md#size-storage-and-consume-results).
+On failure the result object is untouched, so it may contain a stale success.
+Scratch, payload, and segment contents are unspecified. Never consume them
+unless the current call returned `QR_OK`.
 
-## Input formats
+## Sampling, budgets, and tracking
 
-### Packed module matrix
+Stateless C image calls default to Direct and CenterThenMajority5; Rust defaults
+to Center. Explicit selectors, errors, layouts, and cache entry points are
+listed in the matching header. See [tuning](api.md#tune-only-when-needed) for
+mode/sampling tradeoffs. `QR_PIXEL_BUDGET`, `QR_CANDIDATE_BUDGET`, and
+`QR_RETRY_BUDGET` mean an incomplete search, not proof that the image has no QR.
 
-Use `side = 17 + 4 * version` for Model 2 versions 1–40 (21–177 modules).
-The required byte count is `(side * side + 7) / 8`. The top-left module is the
-MSB of byte zero; module `(x, y)` has index `i = y * side + x`, byte `i / 8`,
-and mask `0x80 >> (i % 8)`. A set bit is black. Rows have **no byte padding**:
-for a 21-module row the next row starts at bit 21, not bit 24. Unused final-byte
-bits do not represent modules. Do not include the surrounding quiet zone.
-Normal orientation has finders at top-left, top-right, and bottom-left; content
-failures trigger a transpose retry. There is no rotation search for matrix input.
-
-### Micro QR input
-
-`qr_decode_micro_matrix` accepts sides 11, 13, 15, and 17 for M1–M4. Packing is
-the same row-major, MSB-first, no-row-padding format as Model 2. Matrix decoding
-tries all four rotations and their reflected forms and reports the successful
-orientation. Gray8 Micro QR images should include the two-module quiet zone.
-The single-finder detector uses bounded affine geometry; strong projective
-distortion may return `QR_NOT_FOUND`.
-
-### Gray8 image or ROI
-
-Each pixel is one luminance byte: 0 is black and 255 is white. Convert RGB/YUV or
-camera-native formats in the application; the API does not load image files.
-Unlike matrix input, include the available surrounding quiet zone in the image.
-`width` and `height` must be nonzero and `stride >= width`. The minimum
-`pixels_len` is `(height - 1) * stride + width`, calculated without overflow.
-Only the active row width is needed on the last row; trailing padding is optional.
-The dimensions must fit `memory.max_width` and `memory.max_height`.
-
-For a crop at `(roi_x, roi_y)` in a parent frame, pass
-`pixels = frame + roi_y * frame_stride + roi_x`, `stride = frame_stride`, and the
-crop's width/height. Ensure the crop fits the frame and the pointer/length remains
-inside the frame allocation; use the minimum span above or the available suffix.
-The API borrows the pixels and does not copy the ROI. Stateless result corners
-are relative to this supplied crop, so add `(roi_x, roi_y)` to map them to parent
-frame coordinates. Tracked corners refer to the complete supplied input image,
-including when the tracker internally searches a smaller ROI.
-
-## Budgets
-
-`qr_config` has five `uint32_t` fields and remains 20 bytes in ABI version 1:
-
-| Field | Default | Accepted range / meaning |
-| --- | ---: | --- |
-| `max_finders` | 32 | 3–128 finder records per pass; affects scratch size. |
-| `max_candidates` | 4096 | 1–1,000,000 examined finder triples shared across passes. |
-| `max_retries` | 256 | 1–65536 sampling attempts shared across passes, excluding core transpose retries. |
-| `row_step` | 1 | 1–compiled maximum height; larger steps scan fewer rows and can miss symbols. |
-| `local_radius` | 24 | 4–128 pixels; half-width of local threshold sampling window. |
-
-`qr_decode_gray` uses a finite shared limit of 64,000,000 actual input pixel reads.
-`qr_decode_gray_with_budget(config, max_pixel_reads, ...)` keeps the same arguments after the new scalar `size_t` limit.
-The limit accepts 1–`SIZE_MAX`, includes initial min/max and repeated reads across all passes, and charges 26 reads per local threshold decision.
-Zero returns `QR_INVALID_CONFIG` (12); exhaustion returns `QR_PIXEL_BUDGET` (18) before another read.
-The pixel limit does not bound total cycles or caller-buffer initialization.
-ABI version 1, the five-`uint32_t`/20-byte `qr_config`, `qr_result`, and `qr_memory_info` remain unchanged, so existing compiled callers can keep using the old function.
-The new function shares the old numeric, alignment, overlap, buffer, and result contracts.
-
-The C API allocates no storage and does not require the application to use malloc.
-Static storage, arenas, and RTOS task-specific memory are all usable.
-Uninitialized C storage is accepted for outputs and scratch.
-After numeric and overlap checks, the FFI initializes byte storage to zero and segment enum values to valid values before constructing Rust references.
-This initialization cost does not apply to the safe Rust API.
-
-## Reading results and segments
-
-Payload output is a byte span, **not a NUL-terminated C string**. It may contain
-zero bytes and non-text data; use lengths (`fwrite`, hex printing, or a byte-aware
-consumer). For text, choose a character-set policy from the segment modes and
-ECI history, then convert in the application. The decoder does not decrypt,
-decompress, or perform character-set conversion.
-
-`qr_segment.offset` and `len` select a span within the valid payload prefix.
-Entries preserve original bitstream order, including controls and empty data
-segments. Do not assume every entry emits bytes or filter controls before
-interpreting ECI/FNC1/Structured Append metadata.
-
-| Mode constant (value) | Output / interpretation |
-| --- | --- |
-| `QR_NUMERIC` (1) | ASCII digits. |
-| `QR_ALPHANUMERIC` (2) | QR alphanumeric characters, with FNC1 percent processing when active. |
-| `QR_BYTE` (4) | Raw bytes, including NUL and `%`; interpret encoding in the application. |
-| `QR_KANJI` (8) | Two-byte Shift_JIS sequences regardless of ECI; no conversion. |
-| `QR_ECI` (7) | Zero-length control; `eci` retains this assignment. |
-| `QR_FNC1_FIRST` (5), `QR_FNC1_SECOND` (9) | Zero-length controls; read `result.fnc1` and application indicator. |
-| `QR_STRUCTURED_APPEND` (3) | Zero-length control; read `result.sa_*` and assemble symbols in the application. |
-
-Each entry records the last ECI assignment encountered, initially 3. This is not
-an active set of assignments when character-set and transformation ECIs coexist;
-every ECI control is retained so the caller can interpret that history.
-With FNC1, an Alphanumeric `%` becomes GS (`0x1D`), and `%%` becomes `%`.
-Pairing continues across Alphanumeric segments and ECI headers; Numeric, Byte,
-and Kanji segments end it even when empty. A pair's byte belongs to the segment
-with the first percent, so even a nonempty encoded segment may emit zero bytes.
-See [the output contract](api.md#decoded-results) for detailed examples.
-
-`qr_result` reports version 1–40, `ec_level` (`QR_EC_L/M/Q/H` = 0/1/2/3), mask
-0–7, total corrected codewords, and selected format/version BCH distances 0–3
-(version distance is zero for versions 1–6). These are decoding metadata, not a
-confidence score. `fnc1` is 0/1/2 for none/first/second position; the raw
-`fnc1_application_indicator` is meaningful for second position. When
-`sa_present == 1`, `sa_index` is zero-based, `sa_total` is 1–16, and `sa_parity`
-is the original parity byte. No cross-call reassembly occurs.
-
-Gray8 results additionally report `inverted`, `local_threshold`, examined
-`candidates`, sampling `retries`, and floating-point grid-boundary corners in
-order `(0,0)`, `(side,0)`, `(side,side)`, `(0,side)`. Corner order is retained after
-transpose decoding; it is not a reordered axis-aligned box, and no mirrored flag
-is provided. Matrix decoding sets all detection-only fields to zero.
-
-`qr_micro_result` reports Micro version 1–4, mask 0–3, corrected codewords,
-format BCH distance, and the successful `rotation` and `mirrored` orientation.
-Its `ec_level` is `QR_MICRO_EC_L/M/Q` for M2–M4 and the uint32 value
-`QR_MICRO_EC_NONE` for M1 detection-only parity. Gray8 results additionally set
-polarity, threshold, candidates, retries, and corners; matrix results leave
-those fields zero. The result remains untouched on every error. Segment modes
-and payload spans use the existing `qr_segment` representation.
-
-## Return codes and recovery
-
-Never read a stale result after failure: `qr_result` is untouched on every error,
-even if it still contains a preceding success. Scratch/payload/segment contents
-are unspecified on failure. Memory-query output is also success-only.
-
-| Constant | Value | Meaning / response |
-| --- | ---: | --- |
-| `QR_OK` | 0 | Success; consume only the returned prefixes. |
-| `QR_INVALID_ARGUMENT` | 1 | Null mandatory pointer, alignment/numeric span error, excessive segment capacity, or invalid tracker state. Fix arguments; initialize/reset tracker if appropriate. |
-| `QR_OVERLAP` | 2 | Nonempty regions overlap. Provide separate storage. |
-| `QR_INVALID_IMAGE` | 10 | Zero dimensions, short span, bad stride, or image extent overflow. Fix the image view. |
-| `QR_IMAGE_TOO_LARGE` | 11 | Supplied dimensions exceed compiled maxima. Crop or rebuild with larger limits. |
-| `QR_INVALID_CONFIG` | 12 | Configuration, pixel limit, or sampling selector is invalid. Use defaults or supported ranges. |
-| `QR_DETECTOR_SCRATCH_TOO_SMALL` | 13 | Detector scratch is insufficient. Re-query memory for this configuration. |
-| `QR_FINDER_CAPACITY` | 14 | A pass exceeded finder storage capacity. Increase `max_finders` and re-query scratch, or simplify the ROI. |
-| `QR_CANDIDATE_BUDGET` | 15 | Shared finder-triple budget exhausted. Increase `max_candidates` or reduce search area. |
-| `QR_RETRY_BUDGET` | 16 | Shared sampling-attempt budget exhausted. Increase `max_retries` or reduce search area. |
-| `QR_NOT_FOUND` | 17 | Search completed without a decoded symbol. Try a clearer frame or suitable ROI. |
-| `QR_PIXEL_BUDGET` | 18 | Pixel-read limit exhausted. Increase the explicit limit or reduce work. |
-| `QR_INVALID_MATRIX` | 101 | Invalid side or insufficient packed bytes. Correct matrix layout. |
-| `QR_CORE_SCRATCH_TOO_SMALL` | 102 | Core scratch is insufficient. Use the queried size. |
-| `QR_FORMAT` | 103 | Format BCH decoding failed or equally close copies conflict. Improve input/sample quality. |
-| `QR_VERSION` | 104 | Version BCH failure or dimensions disagree with decoded version. Check sampling/input. |
-| `QR_REED_SOLOMON` | 105 | Codeword correction failed. Improve input/sample quality. |
-| `QR_TRUNCATED` | 106 | Insufficient corrected payload bits for a segment. Check symbol/input integrity. |
-| `QR_UNSUPPORTED_MODE` | 107 | Unsupported mode indicator. Check symbol support/input integrity. |
-| `QR_MALFORMED_PAYLOAD` | 108 | Invalid payload values or control order. Check symbol/input integrity. |
-| `QR_OUTPUT_TOO_SMALL` | 109 | Payload capacity insufficient. Retry with a larger buffer up to `max_payload_bytes`. |
-| `QR_SEGMENTS_TOO_SMALL` | 110 | Segment capacity insufficient. Retry with more entries up to `max_segments`. |
-
-A recognition failure can propagate a core content error rather than
-`QR_NOT_FOUND`. Budget errors do not prove that no symbol is present.
-For optional stats and tracked state, the write conditions are different from
-result output; see [sampling and tracking](#sampling-default-explicit-counters-and-tracking).
-
-## Pointer contract
-
-Each pointer and length must designate a region within one live allocation, aligned for its declared type.
-Input bytes and configuration must be initialized and unchanged for the duration of the call.
-Outputs, scratch, segments, and result require exclusive writable access during the call.
-All nonempty regions, including inputs, must be mutually disjoint.
-Do not modify the same storage from another thread, DMA, or an interrupt handler.
-
-The FFI checks null pointers, alignment, length multiplication, `isize::MAX`, address addition, and overlap.
-Null is allowed only for zero-length byte/segment spans, which become empty Rust slices.
-Configuration, result, and memory-query output pointers are mandatory.
-Segment capacity is accepted up to the queried conservative bound: 5912 for
-Model 2 and 16 for Micro QR.
-The library cannot validate an arbitrary pointer's allocation, lifetime, actual allocation size, or concurrent access.
-
-The result struct is written only on success.
-Scratch, payload, and segment contents are unspecified after failure.
-See the generated header comments for return codes and metadata encodings.
-Invalid sizes or numeric pointer conditions return 1, overlap returns 2, detector errors return 10–18, and core errors return 101–110.
-
-## Measurements on an MCU
-
-Host benchmark results have not been converted into MCU cycle counts.
-On Cortex-M4, enable DWT CYCCNT after board initialization and record the uint32 difference immediately before and after decoding.
-Some Cortex-M0 configurations lack DWT; use a board free-running timer or GPIO with a logic analyzer instead.
-Record measurements with and without interrupts alongside clock frequency, flash wait states, FPU configuration, cache, compiler flags, ROI dimensions, budgets, and result code.
-
-`examples/mcu_measure.c` is a template showing only the measurement boundaries.
-The board supplies `board_cycles` and `board_record`; the caller also manages the image, storage, and initialization.
-Cycle counts on a physical board, stack watermarks, and success rates on camera input have not been measured.
-For a reproducible macOS live-camera timing harness with a preview, explicit
-start delay, borrowed luma-plane input, and paired stateless/tracker strategies,
-see [the development macOS camera benchmark](../development/mac-camera-benchmark.md). Its status success
-fraction is not a recognition-accuracy measurement.
-
-## Sampling default, explicit counters, and tracking
-
-`qr_decode_gray` and `qr_decode_gray_with_budget` default to
-`QR_SAMPLING_CENTER_THEN_MAJORITY5`, named by `QR_DEFAULT_SAMPLING_STRATEGY`.
-The normal first center-success path has unchanged reads/retries. After a core
-content failure, five-point fallback consumes one retry and up to five global or
-130 local reads per module. Failed projections can therefore consume more work,
-leave fewer hypotheses under tight budgets, change the first decoded symbol, or
-return a budget error where the old Center strategy reached a different result.
-The existing ABI-1 struct layouts, function signatures, symbols, and error codes
-are unchanged. Rust legacy entry points continue to default to Center.
-
-`qr_decode_gray_with_sampling(config, max_pixel_reads, strategy, ..., result, stats)`
-selects `QR_SAMPLING_CENTER` (0) or `QR_SAMPLING_CENTER_THEN_MAJORITY5` (1).
-Unknown values return `QR_INVALID_CONFIG`. `stats` may be NULL; otherwise it names
-one disjoint writable `qr_stats`. It receives actual cumulative counters on
-success or failure after decoder invocation. Pointer/overlap/state/strategy/config
-or invalid-image rejection before decoder invocation leaves it untouched. A
-short scratch buffer or oversized valid image can reach decoder validation and
-therefore produce zero counters. Results are still written only on success.
-
-For C tracking, query `qr_tracker_memory` for target `qr_tracker` and `qr_stats`
-sizes/alignment without changing `qr_memory_info`. Allocate one `qr_tracker` and
-call `qr_tracker_init` before decoding; complete all-zero initialization is also
-valid. Init/reset write canonical Searching without reading previous storage and
-may receive live, writable, properly aligned uninitialized storage. Decode must
-never receive uninitialized state. Numeric fields cannot detect uninitialized
-storage or prove pointer allocation validity.
-
-```c
-qr_tracker tracker;
-qr_stats stats;
-qr_tracker_init(&tracker);
-/* Caller allocates config, image, scratch, payload, segments and result as usual. */
-int32_t code = qr_tracker_decode_gray(&tracker, &config, 64000000,
-    QR_SAMPLING_CENTER_THEN_MAJORITY5,
-    pixels, pixels_len, width, height, stride,
-    detector_scratch, detector_scratch_len, core_scratch, core_scratch_len,
-    payload, payload_capacity, segments, segment_capacity, &result, &stats);
-```
-
-The public state is entirely integer data: tag, misses, rectangle, and saved input
-dimensions. It retains no pointer, image, scratch, output or previous payload.
-Searching tag 0 requires every remaining field to be zero. Candidate tag 1
-requires misses=1; Tracking tag 2 requires misses=0. Saved dimensions must be
-nonzero and within `qr_memory`'s compiled maxima, and a nonempty rectangle must
-fit them using checked arithmetic. Unknown tags or inconsistent integers return
-`QR_INVALID_ARGUMENT` before buffer initialization. Rust enums are constructed
-only after validation; no raw C enum or integer is transmuted into a Rust enum.
-
-All nonempty ranges, including tracker, optional stats, config and input, must
-be mutually disjoint. Tracker/state/result bytes remain unchanged on validation,
-capacity, or pixel/candidate/retry-budget errors. Success and complete ordinary
-recognition misses update the state. ROI and full-image search share one frame's
-budgets and counters, including center and majority attempts; counters can reach
-eight passes. First complete miss retains Candidate; a second expires it.
-A candidate does not confirm QR presence. Input width/height changes invalidate
-the saved hint for searching, but are not invalid saved state. Stride changes
-retain coordinates; same-size crop origin or scale changes require
-`qr_tracker_reset`. Corners always refer to the complete supplied input image.
-
-FFI calls initialize caller-provided byte and segment buffers, so unnecessarily
-large output capacities can add work even on small images or unsuccessful
-recognition attempts. Choose capacities for the application's payload and segment
-needs, and handle capacity errors when inputs exceed them. The development
-[benchmark guide](../development/sampling-performance.md) explains how to compare
-initialization and sampling costs; measure the complete call on
-the target board.
-
-## Optional local Gray8 row cache
-
-`qr_local_cache_memory(config, width, &bytes)` separately queries `5 * width`
-bytes, alignment one. It validates configuration and width; the ABI-1
-`qr_memory_info` layout and existing symbols are unchanged.
-`qr_decode_gray_with_sampling_cached(..., result, stats, cache, cache_len)` and
-`qr_tracker_decode_gray_cached(..., result, stats, cache, cache_len)` take the
-same sampling selector, input-read budget, and optional stats as their uncached
-counterparts. These APIs support Model 2 only.
-
-Place the caller-owned cache in internal RAM. Only horizontal local finder scans
-fill complete rows; irregular helpers use existing hits and directly read misses
-without replacing rows. Tags reset every call and every tracker ROI/full retry;
-tracker budgets and state commits retain their original contract.
-`cache_len` must cover `5 * width`; shorter capacity returns 13. All provided
-cache bytes, including excess capacity, must be exclusive and disjoint from every
-input/output/config/tracker/stats span. Numeric overlap checks happen before
-creating any writable Rust slice. Only the required prefix is initialized; excess
-bytes remain untouched. Result/stats write rules match the uncached functions,
-including untouched stats on earlier argument/capacity rejection.
-
-`pixel_reads` and the input-read limit include fills and direct input reads,
-exclude internal-RAM hits. Prefetch may exhaust a finite budget earlier, so equal
-budgets do not guarantee equal outcomes. This is a source-read optimization;
-physical SDRAM traffic and Cortex-M7 timings need separate hardware measurements.
-See [cache behavior and budgets](detection.md#optional-internal-ram-local-row-cache).
+Keep one initialized `qr_tracker` per stream. ROI and full-image recovery share
+one frame budget. Call `qr_tracker_reset` when crop origin or scale changes at
+the same dimensions; size scratch for the full input. Tracker state must not
+alias any other argument. Optional stats can be updated on failure; they do
+not make failed result/payload output valid.

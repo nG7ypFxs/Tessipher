@@ -1,44 +1,54 @@
 # Tessipher
 
-Tessipher provides a `no_std`, allocation-free QR decoder for embedded systems.
-Matrix decoding is
-available as `tessipher::core`; borrowed Gray8 image detection is available as
-`tessipher::detect` and is enabled by default.
+Tessipher provides a `no_std`, allocation-free QR decoder for embedded systems,
+with no external runtime dependencies. It decodes QR Model 2 module matrices
+through `tessipher::core` and borrowed Gray8 images through `tessipher::detect`.
+Applications supply and reuse image, scratch, payload, and segment storage.
+Requires Rust 1.85 or later.
 
 ## Installation
 
 The package and Rust library are both named `tessipher`. To use a crates.io
-release, add:
+release, run in your project:
 
-```toml
-[dependencies]
-tessipher = "0.1.0"
+```sh
+cargo add tessipher
 ```
 
-For development against a local checkout, replace `version` with
-`path = "../Tessipher/crates/qr"`, adjusting the path for your project layout.
+For development against a local checkout, run
+`cargo add tessipher --path ../Tessipher/crates/qr`, adjusting the path for your project layout.
+Before the first registry publication, use the checkout dependency.
 
-The default `detect` feature provides bounded Gray8 finder search and matrix
-decoding. Use `default-features = false` for matrix-only builds, add
-`features = ["micro-qr"]` for Micro QR matrix decoding, or add
-`features = ["micro-qr-detect"]` for Micro QR image detection. All image,
-scratch, payload, and segment storage remains caller-owned.
+| Cargo feature | Effect |
+| --- | --- |
+| `detect` (default) | Model 2 Gray8 image detection |
+| `micro-qr` | Micro QR M1–M4 matrix decoding |
+| `micro-qr-detect` | Micro QR Gray8 detection; enables `detect` and `micro-qr` |
 
-The repository-only `tessipher-ffi` crate builds the C ABI and `libqr_ffi.a`;
-it is intentionally not published. See the repository
-[C integration guide](https://github.com/nG7ypFxs/Tessipher/blob/main/docs/ffi.md)
-for its build and header workflow.
+Use `default-features = false` for matrix-only builds. Image detection returns
+at most one symbol; output is bytes without character-set conversion.
 
-Generate the complete API documentation from the repository root with:
+## Usage and documentation
+
+The [repository quickstart](https://github.com/nG7ypFxs/Tessipher#getting-started)
+covers installation. The
+[user guides](https://github.com/nG7ypFxs/Tessipher/blob/main/docs/README.md)
+cover API contracts, detection modes, sampling, and tracking. Direct mode is
+the default; optional Fast mode trades additional search work and optional
+scratch storage for performance on some inputs. Evaluate modes with the
+application's recognition and budget requirements.
+
+The repository-only `tessipher-ffi` crate provides the C ABI; follow the
+[C integration guide](https://github.com/nG7ypFxs/Tessipher/blob/main/docs/ffi.md).
+
+Generate the item reference from the repository root with:
 
 ```sh
 cargo doc -p tessipher --all-features --no-deps --locked --open
 ```
 
-The [docs.rs API documentation](https://docs.rs/tessipher) describes the published
-API. See the [Tessipher repository](https://github.com/nG7ypFxs/Tessipher)
-for the image example, memory requirements, integration guides, and feature details.
-The bundled [third-party notices](THIRD_PARTY.md) include the MIT permission notice
-for the Nayuki-derived ECC and block tables.
+The [docs.rs reference](https://docs.rs/tessipher) describes the published API.
+The bundled [third-party notices](THIRD_PARTY.md) include the MIT permission
+notice for the Nayuki-derived ECC and block tables.
 
 Licensed under MIT OR Apache-2.0.

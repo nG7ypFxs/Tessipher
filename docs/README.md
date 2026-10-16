@@ -1,27 +1,15 @@
-# Tessipher user guides
+# Tessipher guides
 
-These guides are for applications integrating Tessipher through Rust or C,
-including embedded firmware. Start with the repository's
-[getting started guide](../README.md#getting-started) for requirements,
-installation, supported formats, and Cargo features.
+New to Tessipher? Start with the [quickstart](../README.md#getting-started).
+Then choose the guide for your work:
 
-| Guide | Read it when you need to |
+| Reader | Guide |
 | --- | --- |
-| [Rust APIs and memory](api.md) | Size caller-owned buffers, decode images or matrices, interpret results and errors, or track symbols across frames |
-| [Image detection and tuning](detection.md) | Choose search budgets, sampling, ROI tracking, and row caching, or understand recognition limits |
-| [C integration and embedded builds](ffi.md) | Build a static library with a matching header, call the C ABI, or integrate with firmware |
-| [Zephyr and QEMU example](zephyr.md) | Build and run the supplied Cortex-M3 C integration example |
+| Rust application developer | [Decode images and matrices, size buffers, and track frames](api.md) |
+| C or firmware developer | [Build and call the C library](ffi.md) |
+| Library contributor or release maintainer | [Develop, test, and release](development.md) |
+| Developer measuring performance | [Run and interpret benchmarks](benchmarks.md) |
 
-For the complete Rust item reference, generate rustdoc from the repository root:
-
-```sh
-cargo doc -p tessipher --all-features --no-deps --locked --open
-```
-
-Image detection returns at most one symbol. Camera capture, image-file loading,
-character-set conversion, and joining Structured Append symbols belong to the
-application. Budget limits bound decoder work but do not establish a worst-case
-execution time; measure timing and stack usage on the target hardware.
-
-Contributor checks, release preparation, and benchmark instructions are in
-[development documentation](../development/README.md).
+For individual Rust items, run
+`cargo doc -p tessipher --all-features --no-deps --locked --open`.
+For C declarations, use the [header](../include/tessipher.h) matching your build.

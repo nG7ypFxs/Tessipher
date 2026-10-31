@@ -20,7 +20,7 @@ jobs:
         run: python3 -m unittest discover -s tools -p test_changelog.py
         env:
           GIT_CLIFF: ${{ runner.temp }}/git-cliff/bin/git-cliff
-      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.10.10"
           cache-dependency-glob: "tools/*.py"
@@ -37,7 +37,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
-      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.10.10"
           cache-dependency-glob: "tools/*.py"
@@ -94,7 +94,7 @@ jobs:
         with:
           toolchain: stable
           targets: thumbv7m-none-eabi
-      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.10.10"
           cache-dependency-glob: "tools/*.py"

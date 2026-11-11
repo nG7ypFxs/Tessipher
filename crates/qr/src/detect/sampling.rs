@@ -23,8 +23,10 @@ fn orient(f: [Finder; 3]) -> Option<(Finder, Finder, Finder)> {
     let mut bl = f[(index + 2) % 3];
     let a = tr.p.sub(tl.p);
     let b = bl.p.sub(tl.p);
-    let na = a.norm();
-    let nb = b.norm();
+    // Each distance is opposite its finder. Reuse the selected edges rather
+    // than repeating the square roots (software divisions on Cortex-M3).
+    let na = distances[(index + 2) % 3];
+    let nb = distances[(index + 1) % 3];
     if na < 10.0 || nb < 10.0 || na / nb < 0.4 || na / nb > 2.5 || a.dot(b).abs() > na * nb * 0.60 {
         return None;
     }

@@ -41,6 +41,10 @@ fn ratio(r: &[usize; 5]) -> Option<f32> {
     if sum < 7 || r.contains(&0) {
         return None;
     }
+    #[cfg(target_pointer_width = "32")]
+    if !ratio_may_match(r, sum) {
+        return None;
+    }
     let m = sum as f32 / 7.0;
     let tolerance = m * 0.85;
     for (i, &n) in r.iter().enumerate() {
@@ -50,6 +54,18 @@ fn ratio(r: &[usize; 5]) -> Option<f32> {
         }
     }
     Some(m)
+}
+#[cfg(any(target_pointer_width = "32", test))]
+#[inline]
+fn ratio_may_match(r: &[usize; 5], sum: usize) -> bool {
+    // Reject noise before software floating-point arithmetic on small MCUs.
+    // These deliberately loose bounds enclose the floating-point acceptance
+    // intervals: center [1.64, 4.36] / 7, other runs [0.15, 1.85] / 7.
+    // Row and axis runs are disjoint and total at most 32768 pixels, so all
+    // products fit in 32 bits. Keep the original test for the final decision.
+    r[2] * 5 >= sum
+        && r[2] * 3 <= sum * 2
+        && [r[0], r[1], r[3], r[4]].iter().all(|&n| n * 7 <= sum * 2)
 }
 // This buffer is a disjoint tail of matrix scratch, live only while scanning.
 // Reset for each fixed-x cross-check; tags cannot outlive its image or radius.
@@ -419,6 +435,21 @@ fn global_mask8(pixels: &[u8], threshold: u8) -> u8 {
     } & high;
     (mask.wrapping_mul(0x0002_0408_1020_4081) >> 56) as u8
 }
+// Keep lane comparisons and the bit gather in native registers on 32-bit MCUs.
+#[inline]
+#[cfg(any(not(target_pointer_width = "64"), test))]
+fn global_mask4(pixels: &[u8], threshold: u8) -> u8 {
+    let word = u32::from_le_bytes(pixels[..4].try_into().unwrap());
+    let high = 0x8080_8080u32;
+    let threshold_low = u32::from(threshold & 0x7f) * 0x0101_0101;
+    let compare = (threshold_low | high) - (word & 0x7f7f_7f7f);
+    let mask = if threshold < 128 {
+        compare & !word
+    } else {
+        compare | !word
+    } & high;
+    (mask.wrapping_mul(0x0020_4081) >> 28) as u8
+}
 fn scan_global_register<const OPT: bool>(
     bin: Binary<'_, OPT>,
     storage: &mut [u8],
@@ -454,16 +485,16 @@ fn scan_global_register<const OPT: bool>(
                     {
                         bits = u16::from(global_mask8(pixels, bin.threshold))
                             | (u16::from(global_mask8(&pixels[8..], bin.threshold)) << 8);
-                        if bin.inverted {
-                            bits = !bits;
-                        }
                     }
                     #[cfg(not(target_pointer_width = "64"))]
                     {
-                        bits = 0;
-                        for (i, &pixel) in pixels.iter().enumerate() {
-                            bits |= u16::from((pixel <= bin.threshold) ^ bin.inverted) << i;
-                        }
+                        bits = u16::from(global_mask4(pixels, bin.threshold))
+                            | (u16::from(global_mask4(&pixels[4..], bin.threshold)) << 4)
+                            | (u16::from(global_mask4(&pixels[8..], bin.threshold)) << 8)
+                            | (u16::from(global_mask4(&pixels[12..], bin.threshold)) << 12);
+                    }
+                    if bin.inverted {
+                        bits = !bits;
                     }
                     used += 16;
                     buffered = 16;

@@ -89,10 +89,14 @@ pub(crate) fn correct(
     let (c, rest) = rest.split_at_mut(32);
     let (b, rest) = rest.split_at_mut(32);
     let (t, omega) = rest.split_at_mut(32);
-    work_clear(s, c, b, t, omega);
     if !syndromes(data, n, s) {
         return Ok(0);
     }
+    // Syndromes overwrite their active prefix; t is assigned before use.
+    // Clean blocks therefore need no workspace clearing at all.
+    c.fill(0);
+    b.fill(0);
+    omega.fill(0);
     c[0] = 1;
     b[0] = 1;
     let mut degree = 0;
@@ -160,13 +164,6 @@ pub(crate) fn correct(
     } else {
         Ok(roots)
     }
-}
-fn work_clear(a: &mut [u8], b: &mut [u8], c: &mut [u8], d: &mut [u8], e: &mut [u8]) {
-    a.fill(0);
-    b.fill(0);
-    c.fill(0);
-    d.fill(0);
-    e.fill(0);
 }
 
 #[cfg(test)]

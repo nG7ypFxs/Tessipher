@@ -8,18 +8,33 @@ impl Bits<'_> {
     fn left(&self) -> usize {
         self.data.len() * 8 - self.pos
     }
-    fn read(&mut self, n: usize) -> Result<u32, Error> {
+    fn read(&mut self, mut n: usize) -> Result<u32, Error> {
         if n > self.left() {
             return Err(Error::Truncated);
         }
+        if n == 8 {
+            let index = self.pos / 8;
+            let offset = self.pos % 8;
+            let mut byte = u32::from(self.data[index]) << offset;
+            if offset != 0 {
+                byte |= u32::from(self.data[index + 1]) >> (8 - offset);
+            }
+            self.pos += 8;
+            return Ok(byte & 0xff);
+        }
         let mut v = 0;
-        for _ in 0..n {
-            v = (v << 1) | ((self.data[self.pos / 8] >> (7 - self.pos % 8)) & 1) as u32;
-            self.pos += 1;
+        while n != 0 {
+            let available = 8 - self.pos % 8;
+            let take = n.min(available);
+            let byte = u32::from(self.data[self.pos / 8]);
+            v = (v << take) | ((byte >> (available - take)) & ((1 << take) - 1));
+            self.pos += take;
+            n -= take;
         }
         Ok(v)
     }
 }
+
 fn emit(output: &mut [u8], len: &mut usize, b: u8) -> Result<(), Error> {
     if *len >= output.len() {
         return Err(Error::OutputTooSmall);
@@ -252,4 +267,29 @@ pub(crate) fn parse(
         r.segment_count += 1;
     }
     Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_chunk_reads_match_bitwise_reference_at_every_offset() {
+        let data = [0x00, 0xff, 0xa5, 0x39, 0x81, 0x7e, 0x42];
+        for pos in 0..=data.len() * 8 {
+            for count in 0..=40 {
+                let mut bits = Bits { data: &data, pos };
+                if count > data.len() * 8 - pos {
+                    assert_eq!(bits.read(count), Err(Error::Truncated));
+                    assert_eq!(bits.pos, pos);
+                } else {
+                    let expected = (pos..pos + count).fold(0u32, |v, bit| {
+                        (v << 1) | u32::from((data[bit / 8] >> (7 - bit % 8)) & 1)
+                    });
+                    assert_eq!(bits.read(count), Ok(expected), "pos={pos}, count={count}");
+                    assert_eq!(bits.pos, pos + count);
+                }
+            }
+        }
+    }
 }

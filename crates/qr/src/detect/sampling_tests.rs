@@ -1023,3 +1023,110 @@ mod alignment_global_tests {
         }
     }
 }
+
+mod orientation_regression_tests {
+    use super::super::*;
+
+    fn reference_orient(f: [Finder; 3]) -> Option<(Finder, Finder, Finder)> {
+        let distances = [
+            f[1].p.sub(f[2].p).norm(),
+            f[0].p.sub(f[2].p).norm(),
+            f[0].p.sub(f[1].p).norm(),
+        ];
+        let mut index = 0;
+        for i in 1..3 {
+            if distances[i] > distances[index] {
+                index = i;
+            }
+        }
+        let tl = f[index];
+        let mut tr = f[(index + 1) % 3];
+        let mut bl = f[(index + 2) % 3];
+        let a = tr.p.sub(tl.p);
+        let b = bl.p.sub(tl.p);
+        let na = a.norm();
+        let nb = b.norm();
+        if na < 10.0
+            || nb < 10.0
+            || na / nb < 0.4
+            || na / nb > 2.5
+            || a.dot(b).abs() > na * nb * 0.60
+        {
+            return None;
+        }
+        let min_x = tl.pitch_x.min(tr.pitch_x.min(bl.pitch_x));
+        let max_x = tl.pitch_x.max(tr.pitch_x.max(bl.pitch_x));
+        let min_y = tl.pitch_y.min(tr.pitch_y.min(bl.pitch_y));
+        let max_y = tl.pitch_y.max(tr.pitch_y.max(bl.pitch_y));
+        if min_x < 0.7 || min_y < 0.7 || max_x > min_x * 3.0 || max_y > min_y * 3.0 {
+            return None;
+        }
+        if a.cross(b) < 0.0 {
+            core::mem::swap(&mut tr, &mut bl);
+        }
+        Some((tl, tr, bl))
+    }
+
+    #[test]
+    fn reused_edge_lengths_preserve_orientation_and_rejection() {
+        fn identity(result: Option<(Finder, Finder, Finder)>) -> Option<[u32; 3]> {
+            result.map(|(a, b, c)| [a.hits, b.hits, c.hits])
+        }
+        let permutations = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let check = |points: [Point; 3], pitches: [f32; 3]| {
+            let finders = core::array::from_fn::<_, 3, _>(|i| Finder {
+                p: points[i],
+                pitch_x: pitches[i],
+                pitch_y: pitches[2 - i],
+                hits: i as u32,
+            });
+            for order in permutations {
+                let set = order.map(|i| finders[i]);
+                assert_eq!(
+                    identity(orient(set)),
+                    identity(reference_orient(set)),
+                    "points={points:?}, pitches={pitches:?}, order={order:?}"
+                );
+            }
+        };
+        // Coincident points, equal longest sides, and each acceptance boundary.
+        for span in [0.0, 9.999, 10.0, 10.001, 32768.0] {
+            for ratio in [0.3999, 0.4, 0.4001, 1.0, 2.4999, 2.5, 2.5001] {
+                for pitch in [0.6999, 0.7, 0.7001, 2.0999, 2.1, 2.1001] {
+                    check(
+                        [
+                            Point { x: 0.0, y: 0.0 },
+                            Point { x: span, y: 0.0 },
+                            Point {
+                                x: 0.0,
+                                y: span * ratio,
+                            },
+                        ],
+                        [0.7, pitch, 0.7],
+                    );
+                }
+            }
+        }
+        let mut state = 0x32c0ffeeu32;
+        let mut random = || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            state
+        };
+        // Detector coordinates include fractional centers up to 32768 pixels.
+        for _ in 0..4096 {
+            let points = core::array::from_fn(|_| Point {
+                x: (random() & 0x1fffff) as f32 / 64.0,
+                y: (random() & 0x1fffff) as f32 / 64.0,
+            });
+            let pitches = core::array::from_fn(|_| (random() & 0xfff) as f32 / 64.0);
+            check(points, pitches);
+        }
+    }
+}

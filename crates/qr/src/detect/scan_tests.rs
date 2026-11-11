@@ -577,6 +577,111 @@ mod regression_tests {
     }
 
     #[test]
+    fn integer_ratio_prefilter_preserves_float_decisions() {
+        fn reference(r: &[usize; 5]) -> Option<f32> {
+            let sum = r.iter().sum::<usize>();
+            if sum < 7 || r.contains(&0) {
+                return None;
+            }
+            let m = sum as f32 / 7.0;
+            let tolerance = m * 0.85;
+            for (i, &n) in r.iter().enumerate() {
+                let expected = m * if i == 2 { 3.0 } else { 1.0 };
+                if (n as f32 - expected).abs() > tolerance * if i == 2 { 1.6 } else { 1.0 } {
+                    return None;
+                }
+            }
+            Some(m)
+        }
+        let check = |r: [usize; 5]| {
+            let sum = r.iter().sum();
+            let filtered = ratio_may_match(&r, sum).then(|| ratio(&r)).flatten();
+            assert_eq!(filtered, reference(&r), "runs={r:?}");
+        };
+        // Exhaust all short patterns, including absent runs.
+        for packed in 0..16usize.pow(5) {
+            check(core::array::from_fn(|i| (packed >> (4 * i)) & 15));
+        }
+        // Exercise every valid total length around the float and integer bounds.
+        for sum in 7..=32768usize {
+            for lane in 0..5 {
+                let bounds = if lane == 2 {
+                    [sum / 5, sum * 2 / 3, sum * 164 / 700, sum * 436 / 700]
+                } else {
+                    [sum / 56, sum * 2 / 7, sum * 15 / 700, sum * 185 / 700]
+                };
+                for bound in bounds {
+                    for n in bound.saturating_sub(2)..=(bound + 2).min(sum) {
+                        let mut runs = [0; 5];
+                        runs[lane] = n;
+                        let mut remaining = sum - n;
+                        let mut weight_left = if lane == 2 { 4 } else { 6 };
+                        for (i, value) in runs.iter_mut().enumerate() {
+                            if i != lane {
+                                let weight = if i == 2 { 3 } else { 1 };
+                                *value = remaining * weight / weight_left;
+                                remaining -= *value;
+                                weight_left -= weight;
+                            }
+                        }
+                        check(runs);
+                    }
+                }
+            }
+        }
+        let mut seed = 0x6d2b79f5u32;
+        for _ in 0..100000 {
+            let mut runs = [0; 5];
+            let mut remaining = 32768;
+            for value in &mut runs {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                *value = seed as usize % (remaining + 1);
+                remaining -= *value;
+            }
+            check(runs);
+        }
+    }
+
+    #[test]
+    fn global_mask4_matches_all_thresholds_lanes_and_unaligned_pixels() {
+        for threshold in 0..=255u8 {
+            for value in 0..=255u8 {
+                for lane in 0..4 {
+                    for background in [0, 127, 128, 255] {
+                        let mut pixels = [background; 4];
+                        pixels[lane] = value;
+                        let expected = pixels
+                            .iter()
+                            .enumerate()
+                            .fold(0u8, |bits, (i, &p)| bits | (u8::from(p <= threshold) << i));
+                        assert_eq!(global_mask4(&pixels, threshold), expected);
+                    }
+                }
+            }
+        }
+        let mut seed = 0x12345678u32;
+        for _ in 0..10000 {
+            let mut pixels = [0; 19];
+            for p in &mut pixels {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                *p = (seed >> 24) as u8;
+            }
+            let threshold = (seed >> 16) as u8;
+            for offset in 0..4 {
+                let pixels = &pixels[offset..offset + 16];
+                let actual = u16::from(global_mask4(pixels, threshold))
+                    | (u16::from(global_mask4(&pixels[4..], threshold)) << 4)
+                    | (u16::from(global_mask4(&pixels[8..], threshold)) << 8)
+                    | (u16::from(global_mask4(&pixels[12..], threshold)) << 12);
+                let expected = pixels.iter().enumerate().fold(0u16, |bits, (i, &p)| {
+                    bits | (u16::from(p <= threshold) << i)
+                });
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
     #[cfg(target_pointer_width = "64")]
     fn global_mask8_matches_all_thresholds_and_lanes() {
         for threshold in 0..=255u8 {

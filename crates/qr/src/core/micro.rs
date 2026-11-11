@@ -359,14 +359,28 @@ impl Bits<'_> {
     fn left(&self) -> usize {
         self.len - self.pos
     }
-    fn read(&mut self, count: usize) -> Result<u32, Error> {
+    fn read(&mut self, mut count: usize) -> Result<u32, Error> {
         if count > self.left() {
             return Err(Error::Truncated);
         }
+        if count == 8 {
+            let index = self.pos / 8;
+            let offset = self.pos % 8;
+            let mut byte = u32::from(self.data[index]) << offset;
+            if offset != 0 {
+                byte |= u32::from(self.data[index + 1]) >> (8 - offset);
+            }
+            self.pos += 8;
+            return Ok(byte & 0xff);
+        }
         let mut value = 0;
-        for _ in 0..count {
-            value = (value << 1) | ((self.data[self.pos / 8] >> (7 - self.pos % 8)) & 1) as u32;
-            self.pos += 1;
+        while count != 0 {
+            let available = 8 - self.pos % 8;
+            let take = count.min(available);
+            let byte = u32::from(self.data[self.pos / 8]);
+            value = (value << take) | ((byte >> (available - take)) & ((1 << take) - 1));
+            self.pos += take;
+            count -= take;
         }
         Ok(value)
     }
@@ -523,6 +537,32 @@ fn parse_micro(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunk_reads_respect_partial_final_bytes() {
+        let data = [0x00, 0xff, 0xa5, 0x39, 0x81, 0x7e];
+        for len in 0..=data.len() * 8 {
+            for pos in 0..=len {
+                for count in 0..=16 {
+                    let mut bits = Bits {
+                        data: &data,
+                        len,
+                        pos,
+                    };
+                    if count > len - pos {
+                        assert_eq!(bits.read(count), Err(Error::Truncated));
+                        assert_eq!(bits.pos, pos);
+                    } else {
+                        let expected = (pos..pos + count).fold(0u32, |v, bit| {
+                            (v << 1) | u32::from((data[bit / 8] >> (7 - bit % 8)) & 1)
+                        });
+                        assert_eq!(bits.read(count), Ok(expected));
+                        assert_eq!(bits.pos, pos + count);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn direct_payload_rejects_truncation_and_malformed_numeric() {

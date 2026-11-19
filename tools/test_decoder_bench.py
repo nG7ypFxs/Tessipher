@@ -36,6 +36,8 @@ class CorpusTests(unittest.TestCase):
         for first in b" \t\r\n\v\f#\x00":
             path = self.pgm(b"P5\n1 1\n255\n" + bytes([first]))
             self.assertEqual(bench.read_pgm(path)[2], bytes([first]))
+        path = self.pgm(b"P5\n1 1\n255\r\x0a")
+        self.assertEqual(bench.read_pgm(path), (1, 1, b"\x0a"))
 
     def test_rejects_invalid_images(self):
         for data in (

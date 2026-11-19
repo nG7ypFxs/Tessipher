@@ -77,7 +77,10 @@ def read_pgm(path: Path) -> tuple[int, int, bytes]:
         raise ValueError(f"{path}: dimensions must be within 1..640 (no resizing)")
     if offset >= len(data) or data[offset] not in b" \t\r\n\v\f":
         raise ValueError(f"{path}: missing raster separator")
-    offset += 2 if data[offset:offset + 2] == b"\r\n" else 1
+    # A lone CR separator can be followed by an LF-valued first pixel.
+    if data[offset:offset + 2] == b"\r\n" and len(data) - offset == width * height + 2:
+        offset += 1
+    offset += 1
     pixels = data[offset:]
     if len(pixels) != width * height:
         raise ValueError(f"{path}: raster length does not match {width}x{height}")

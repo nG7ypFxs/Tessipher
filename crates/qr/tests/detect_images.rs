@@ -710,10 +710,11 @@ fn large_finderless_image_cannot_bypass_pixel_work_with_tiny_candidate_budgets()
 #[test]
 fn default_pixel_limit_stays_finite_with_large_compile_time_image_maxima() {
     let width = 1100;
-    // Range 8 enters local passes but cannot prove a high-contrast early exit.
-    let pixels: Vec<_> = (0..width * width)
-        .map(|i| if i % 2 == 0 { 120 } else { 128 })
+    // Interior values force window sampling; range 8 keeps local contrast low.
+    let mut pixels: Vec<_> = (0..width * width)
+        .map(|i| if i % 2 == 0 { 121 } else { 127 })
         .collect();
+    pixels[..2].copy_from_slice(&[120, 128]);
     let cfg = Config::<32768, 32768> {
         max_finders: 3,
         max_candidates: 1,

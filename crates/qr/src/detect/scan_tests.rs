@@ -484,7 +484,8 @@ mod regression_tests {
                 }
             }
         }
-        let last_data = std::vec![128;32768];
+        let mut last_data = std::vec![128;32768];
+        last_data[..2].copy_from_slice(&[0, 255]);
         let image = GrayImage::new(&last_data, 1, 32768, 1).unwrap();
         let budget = PixelBudget::new(100);
         let bin = Binary::<true> {
@@ -496,7 +497,7 @@ mod regression_tests {
             threshold: 127,
             inverted: false,
             local: true,
-            range: [128, 128],
+            range: [0, 255],
             radius: 128,
         };
         let mut cache = [0u8; 384];

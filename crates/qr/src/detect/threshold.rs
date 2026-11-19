@@ -219,6 +219,18 @@ impl<const OPT: bool> Binary<'_, OPT> {
         }
         self.budget.read(self.image, x, y)
     }
+    // With sufficient contrast the window mean lies strictly between the ROI
+    // extrema. Otherwise we use the global threshold. Where both rules agree
+    // on an extremum there is no need to read the window.
+    #[inline]
+    pub(super) fn extremum_matches_fallback(self, pixel: u8, fallback: bool) -> bool {
+        if fallback {
+            pixel == self.range[0]
+        } else {
+            pixel == self.range[1]
+        }
+    }
+
     #[inline]
     pub(super) fn dark(self, x: usize, y: usize) -> Result<bool, Error> {
         if OPT && self.local {
@@ -226,10 +238,12 @@ impl<const OPT: bool> Binary<'_, OPT> {
                 return Ok(dark ^ self.inverted);
             }
         }
-        let pixel = self.read(x, y)? as u32;
-        let dark = if !self.local {
-            pixel <= self.threshold as u32
+        let pixel = self.read(x, y)?;
+        let fallback = pixel <= self.threshold;
+        let dark = if !self.local || (OPT && self.extremum_matches_fallback(pixel, fallback)) {
+            fallback
         } else {
+            let pixel = u32::from(pixel);
             'threshold: {
                 // A fixed 5x5 sample window with no integral-image buffer.
                 let mut sum = 0u32;

@@ -130,8 +130,13 @@ impl<'a> AxisPacked<'a> {
         if let Some(dark) = bin.memo_get(x, y) {
             return Ok(dark ^ bin.inverted);
         }
-        let pixel = bin.budget.read(bin.image, x, y)? as u32;
+        let pixel = bin.budget.read(bin.image, x, y)?;
+        let fallback = pixel <= bin.threshold;
         let dark = 'threshold: {
+            if bin.extremum_matches_fallback(pixel, fallback) {
+                break 'threshold fallback;
+            }
+            let pixel = u32::from(pixel);
             let mut sum = 0u32;
             let mut min = 255u8;
             let mut max = 0u8;

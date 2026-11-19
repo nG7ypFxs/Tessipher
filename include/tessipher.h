@@ -402,7 +402,7 @@ int32_t qr_decode_gray(const qr_config *config, const uint8_t *pixels, size_t pi
  * max_pixel_reads is 1..SIZE_MAX; zero returns QR_INVALID_CONFIG.
  * Every actual input read, including min/max, repeats and all passes, is charged.
  * Direct reuses summaries for local row scans; uncached local decisions cost
- * 26 reads, including clamped duplicate samples.
+ * up to 26 reads, including clamped duplicate samples.
  * Returns QR_PIXEL_BUDGET before another read would exceed the limit.
  * The limit bounds pixel work, not total cycles or caller-buffer initialization.
  * The ABI-1 qr_config/qr_result/qr_memory_info layouts are unchanged. */

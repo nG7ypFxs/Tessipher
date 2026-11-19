@@ -346,8 +346,8 @@ pub unsafe extern "C" fn qr_decode_gray(
 ///
 /// `max_pixel_reads` accepts 1..=usize::MAX. Zero returns 12; exhaustion returns 18
 /// before another pixel read. Includes initial min/max, all passes and repeated
-/// reads. Direct reuses local scan summaries; uncached local decisions cost 26
-/// reads. The default entry point uses
+/// reads. Direct reuses local scan summaries; uncached local decisions cost up to
+/// 26 reads. The default entry point uses
 /// [`detect::DEFAULT_MAX_PIXEL_READS`]. This limit does not bound total CPU cycles
 /// or initialization of caller-provided buffers. The ABI-1 config/result/memory
 /// layouts remain unchanged. `out` is written only on success.

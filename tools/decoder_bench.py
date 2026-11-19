@@ -77,7 +77,10 @@ def read_pgm(path: Path) -> tuple[int, int, bytes]:
         raise ValueError(f"{path}: dimensions must be within 1..640 (no resizing)")
     if offset >= len(data) or data[offset] not in b" \t\r\n\v\f":
         raise ValueError(f"{path}: missing raster separator")
-    offset += 2 if data[offset:offset + 2] == b"\r\n" else 1
+    # A lone CR separator can be followed by an LF-valued first pixel.
+    if data[offset:offset + 2] == b"\r\n" and len(data) - offset == width * height + 2:
+        offset += 1
+    offset += 1
     pixels = data[offset:]
     if len(pixels) != width * height:
         raise ValueError(f"{path}: raster length does not match {width}x{height}")
@@ -154,12 +157,27 @@ def native_executable(build_dir: Path, name: str) -> Path:
     raise ValueError(f"native benchmark executable {name} not found under {build_dir}")
 
 
+def build_host_archive() -> Path:
+    version = command_output(["rustc", "-vV"])
+    host = next((line.removeprefix("host: ") for line in version.splitlines()
+                 if line.startswith("host: ")), None)
+    if not host:
+        raise ValueError("rustc did not report its host target")
+    messages = command_output(["cargo", "build", "-p", "tessipher-ffi", "--lib", "--release",
+                               "--locked", "--target", host, "--message-format=json-render-diagnostics"])
+    for line in messages.splitlines():
+        artifact = json.loads(line)
+        if artifact["reason"] == "compiler-artifact" and artifact["target"]["name"] == "qr_ffi":
+            for filename in artifact["filenames"]:
+                archive = Path(filename)
+                if archive.name == "libqr_ffi.a" and archive.is_file():
+                    return archive
+    raise ValueError("Cargo did not report the native Tessipher static library")
+
+
 def build(args: argparse.Namespace) -> tuple[Path, dict]:
-    target = target_dir()
-    subprocess.run(["cargo", "build", "-p", "tessipher-ffi", "--release", "--locked"],
-                   cwd=ROOT, stdout=sys.stderr, check=True)
-    archive = target / "release" / "libqr_ffi.a"
-    build_dir = target / "decoder-bench"
+    archive = build_host_archive()
+    build_dir = target_dir() / "decoder-bench"
     command = [args.cmake, "-S", str(SOURCES), "-B", str(build_dir),
                "-DCMAKE_BUILD_TYPE=Release", f"-DTESSIPHER_ARCHIVE={archive}"]
     if args.source_dir:

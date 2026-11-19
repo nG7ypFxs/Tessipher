@@ -509,8 +509,32 @@ mod memo_tests {
     }
 
     #[test]
+    fn matching_extremum_and_fallback_need_only_the_center_read() {
+        let image = GrayImage::new(&[23, 198], 2, 1, 2).unwrap();
+        for inverted in [false, true] {
+            for (x, expected) in [(0, true), (1, false)] {
+                let budget = PixelBudget::new(1);
+                let bin = Binary::<true> {
+                    image,
+                    budget: &budget,
+                    cache: None,
+                    memo: None,
+                    fill_cache: false,
+                    threshold: 110,
+                    inverted,
+                    local: true,
+                    range: [23, 198],
+                    radius: 5,
+                };
+                assert_eq!(bin.dark(x, 0), Ok(expected ^ inverted));
+                assert_eq!(budget.used.get(), 1);
+            }
+        }
+    }
+
+    #[test]
     fn exhausted_partial_local_decision_never_publishes_cache_entry() {
-        let image = GrayImage::new(&[0, 255, 255, 0], 2, 2, 2).unwrap();
+        let image = GrayImage::new(&[1, 255, 255, 0], 2, 2, 2).unwrap();
         for limit in 0..=26 {
             let budget = PixelBudget::new(limit);
             let mut byte = [0u8];
@@ -528,7 +552,7 @@ mod memo_tests {
                 radius: 5,
             };
             // The first five clamped samples already establish contrast and a
-            // positive sum for the zero-valued center: six input reads suffice.
+            // sum above 25 times the center value: six input reads suffice.
             if limit < 6 {
                 assert_eq!(bin.dark(0, 0), Err(Error::PixelBudget));
                 assert_eq!(bin.memo_get(0, 0), None);

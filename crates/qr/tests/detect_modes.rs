@@ -73,6 +73,36 @@ fn all_modes_decode_corpus_with_both_sampling_strategies_and_exact_scratch() {
 }
 
 #[test]
+fn fast_local_inverted_scan_reuses_memoized_rows_within_budget() {
+    let pixels: [u8; 64] = core::array::from_fn(|i| if i % 8 < 4 { 120 } else { 128 });
+    let image = GrayImage::new(&pixels, 8, 8, 8).unwrap();
+    // Range: 64 reads. Global passes: 2 * 3 rows * 8. Local normal: 3 * 8 * 6.
+    // Every scanned point in the local inverted pass is already memoized.
+    let config = Config::<8, 8> {
+        row_step: 3,
+        max_pixel_reads: 256,
+        ..Default::default()
+    };
+    let mode = DetectionMode::Fast;
+    let mut scratch = vec![0; config.scratch_bytes_for_mode(mode, 8, 8).unwrap()];
+    let mut stats = Stats::default();
+    let result = decode_with_mode(
+        image,
+        &config,
+        mode,
+        SamplingStrategy::Center,
+        &mut scratch,
+        &mut [0; SCRATCH_BYTES],
+        &mut [],
+        &mut [],
+        &mut stats,
+    );
+    assert_eq!(result, Err(Error::NotFound));
+    assert_eq!(stats.pixel_reads, 256);
+    assert_eq!(stats.passes, 4);
+}
+
+#[test]
 fn direct_matches_default_entrypoints_including_counters() {
     let config = DefaultConfig::default();
     let mut ds = vec![0; config.scratch_bytes().unwrap()];

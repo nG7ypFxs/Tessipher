@@ -222,13 +222,15 @@ fn decode_inner<const W: usize, const H: usize, const OPT: bool>(
             range: [min, max],
             radius: config.local_radius,
         };
+        // The preceding local normal pass memoized every pixel on these scan rows.
+        let summarize_rows = bin.local && !(bin.inverted && memo.is_some());
         let (count, full) = scan(
             bin,
             finders,
             config.max_finders,
             config.row_step,
             search.stats,
-            if OPT && bin.local && image.width <= MAX_MATRIX_BYTES / 4 {
+            if OPT && summarize_rows && image.width <= MAX_MATRIX_BYTES / 4 {
                 Some(
                     &mut search.matrix[..if fast {
                         image.width * 4

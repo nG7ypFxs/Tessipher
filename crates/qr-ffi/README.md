@@ -6,20 +6,17 @@ C ABI with caller-owned image, scratch, payload, and result storage. It has
 `publish = false` and is built from this repository alongside the public
 `tessipher` crate.
 
-Build the host static library from the repository root:
+From the repository root, export the host static library and its matching
+header into `target/ffi-export`.
 
 ```sh
-cargo build -p tessipher-ffi --release --locked
+uv run tools/export_ffi.py
 ```
 
-The C header is generated from `abi_schema.rs` and `prototypes.h` during the
-build. The default build can use the checked-in
-[`include/tessipher.h`](../../include/tessipher.h). Optional `micro-qr` and
-`micro-qr-detect` builds need the matching header and archive. Ordinary Cargo
-output does not show the generated header path; use Cargo's JSON build messages
-as demonstrated in [exporting a matching header and archive](../../docs/ffi.md#exporting-a-matching-header-and-archive).
-Do not select a header by globbing the build directory: previous feature and
-target builds may leave several different headers there.
+The header is generated from `abi_schema.rs` and `prototypes.h` with feature
+macros for the exported library. Pass `--output-dir` to select a new or empty
+directory. See [exporting a matching header and archive](../../docs/ffi.md#exporting-a-matching-header-and-archive)
+for Micro QR and firmware build commands.
 
 See the repository [C integration guide](../../docs/ffi.md) for pointer
 contracts, memory queries, and host or firmware linking. The source and

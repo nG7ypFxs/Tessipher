@@ -32,7 +32,8 @@ For C bindings:
 uv run tools/c_format.py --check
 uv run tools/check_header.py
 uv run tools/c_smoke.py
-python3 tools/c_micro.py
+uv run tools/test_export_ffi.py
+uv run tools/c_micro.py
 ```
 
 Edit [abi_schema.rs](../crates/qr-ffi/abi_schema.rs) for shared ABI types and

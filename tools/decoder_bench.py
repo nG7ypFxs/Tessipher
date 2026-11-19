@@ -157,12 +157,27 @@ def native_executable(build_dir: Path, name: str) -> Path:
     raise ValueError(f"native benchmark executable {name} not found under {build_dir}")
 
 
+def build_host_archive() -> Path:
+    version = command_output(["rustc", "-vV"])
+    host = next((line.removeprefix("host: ") for line in version.splitlines()
+                 if line.startswith("host: ")), None)
+    if not host:
+        raise ValueError("rustc did not report its host target")
+    messages = command_output(["cargo", "build", "-p", "tessipher-ffi", "--lib", "--release",
+                               "--locked", "--target", host, "--message-format=json-render-diagnostics"])
+    for line in messages.splitlines():
+        artifact = json.loads(line)
+        if artifact["reason"] == "compiler-artifact" and artifact["target"]["name"] == "qr_ffi":
+            for filename in artifact["filenames"]:
+                archive = Path(filename)
+                if archive.name == "libqr_ffi.a" and archive.is_file():
+                    return archive
+    raise ValueError("Cargo did not report the native Tessipher static library")
+
+
 def build(args: argparse.Namespace) -> tuple[Path, dict]:
-    target = target_dir()
-    subprocess.run(["cargo", "build", "-p", "tessipher-ffi", "--release", "--locked"],
-                   cwd=ROOT, stdout=sys.stderr, check=True)
-    archive = target / "release" / "libqr_ffi.a"
-    build_dir = target / "decoder-bench"
+    archive = build_host_archive()
+    build_dir = target_dir() / "decoder-bench"
     command = [args.cmake, "-S", str(SOURCES), "-B", str(build_dir),
                "-DCMAKE_BUILD_TYPE=Release", f"-DTESSIPHER_ARCHIVE={archive}"]
     if args.source_dir:

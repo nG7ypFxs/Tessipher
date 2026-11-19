@@ -127,6 +127,22 @@ class AccountingTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(b"must be", result.stderr)
 
+    def test_host_build_uses_cargo_reported_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            stale = target / "release" / "libqr_ffi.a"
+            archive = target / "custom" / "release" / "libqr_ffi.a"
+            for path in (stale, archive):
+                path.parent.mkdir(parents=True)
+                path.touch()
+            result = json.dumps({"reason": "compiler-artifact", "target": {"name": "qr_ffi"},
+                                 "filenames": [str(archive.with_suffix(".rlib")), str(archive)]})
+            with mock.patch.dict(bench.os.environ, CARGO_TARGET_DIR=directory, CARGO_BUILD_TARGET="thumbv6m-none-eabi"), \
+                 mock.patch.object(bench, "command_output", side_effect=["host: aarch64-apple-darwin", result]) as run:
+                self.assertEqual(bench.build_host_archive(), archive)
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("--target") + 1], "aarch64-apple-darwin")
+
     def test_cached_source_override_verified_without_source_argument(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
@@ -136,6 +152,7 @@ class AccountingTests(unittest.TestCase):
             args = argparse.Namespace(cmake="cmake", jobs=1, source_dir=None)
             for responses in (["wrong-commit"], [bench.DEPENDENCIES["quirc"]["commit"], " M lib/decode.c"]):
                 with self.subTest(responses=responses), mock.patch.object(bench, "target_dir", return_value=target), \
+                     mock.patch.object(bench, "build_host_archive", return_value=target / "libqr_ffi.a"), \
                      mock.patch.object(bench.subprocess, "run") as run, \
                      mock.patch.object(bench, "command_output", side_effect=responses), \
                      self.assertRaises(ValueError):

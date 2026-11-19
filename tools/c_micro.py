@@ -11,11 +11,10 @@ import re
 import subprocess
 import tempfile
 
-from host_ffi import build_host_ffi
+from host_ffi import rust_host
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-TARGET = ROOT / "target" / "c-micro"
 VARIANTS = {
     "default": ([], 0, 0),
     "matrix": (["--features", "micro-qr"], 1, 0),
@@ -23,9 +22,14 @@ VARIANTS = {
 }
 
 
-def build(name, cargo_args):
-    target = TARGET / name
-    return build_host_ffi("--target-dir", str(target), *cargo_args)
+def export(directory, cargo_args):
+    subprocess.run(
+        ["uv", "run", str(ROOT / "tools/export_ffi.py"),
+         "--output-dir", directory.name, "--target", rust_host(), *cargo_args],
+        cwd=directory.parent,
+        check=True,
+    )
+    return directory / "libqr_ffi.a", directory / "tessipher.h"
 
 
 def normalized_header(path):
@@ -43,7 +47,7 @@ def symbols(archive):
     return {match.group(1) for match in re.finditer(r"\b_?(qr_[A-Za-z0-9_]+)$", output, re.M)}
 
 
-def main():
+def main(target):
     libs = ["-lpthread", "-lm"]
     if platform.system() == "Darwin":
         libs += ["-framework", "Security", "-framework", "CoreFoundation", "-liconv"]
@@ -52,13 +56,13 @@ def main():
     builds = {}
     reference = None
     for name, (cargo_args, matrix, detect) in VARIANTS.items():
-        archive, header = build(name, cargo_args)
+        archive, header = export(target / name, cargo_args)
         current = normalized_header(header)
         if reference is None:
             reference = current
         elif current != reference:
             raise RuntimeError(f"generated {name} header differs beyond feature macro values")
-        executable = TARGET / name / "c-micro"
+        executable = target / name / "c-micro"
         subprocess.run(
             [
                 "cc",
@@ -91,7 +95,7 @@ def main():
     assert matrix_symbols <= builds["matrix"][1] and not (builds["matrix"][1] & detect_symbols)
     assert matrix_symbols | detect_symbols <= builds["detect"][1]
 
-    distributed = TARGET / "detect" / "distributed-header-micro"
+    distributed = target / "detect" / "distributed-header-micro"
     subprocess.run(
         [
             "cc",
@@ -120,7 +124,7 @@ def main():
         include = pathlib.Path(directory)
         (include / "tessipher.h").write_bytes(old_header)
         for name, (archive, _) in builds.items():
-            executable = TARGET / name / "old-header-smoke"
+            executable = target / name / "old-header-smoke"
             subprocess.run(
                 [
                     "cc",
@@ -144,4 +148,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with tempfile.TemporaryDirectory(prefix="tessipher-c-micro-") as directory:
+        main(pathlib.Path(directory))

@@ -52,7 +52,8 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings -D missing_docs
       - run: uv run tools/c_smoke.py
-      - run: python3 tools/c_micro.py
+      - run: uv run tools/test_export_ffi.py
+      - run: uv run tools/c_micro.py
       - run: python3 tools/cross_decode.py
       - run: python3 -m unittest discover -s tools -p test_decoder_bench.py
       - name: Test benchmark allocation probe

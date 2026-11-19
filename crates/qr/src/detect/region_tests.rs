@@ -543,7 +543,7 @@ mod range_budget_review_tests {
     use crate::detect::threshold::PixelBudget;
     use crate::detect::{Config, Error, GrayImage, SamplingStrategy, Stats};
 
-    fn check<const OPT: bool>(already_used: usize, remaining: usize) {
+    fn check<const OPT: bool>(already_used: usize, remaining: usize, fast: bool) {
         // A strided 2x2 ROI reaches [0,255] in its first row. There are four
         // visible pixels, but optimized range discovery needs only two reads.
         let pixels = [0, 255, 0xa5, 255, 255];
@@ -575,7 +575,7 @@ mod range_budget_review_tests {
             &budget,
             None,
             None,
-            false,
+            fast,
             &mut state,
         );
         assert_eq!(result, Err(Error::PixelBudget));
@@ -583,18 +583,19 @@ mod range_budget_review_tests {
         assert!(budget.used.get() >= already_used);
         assert_eq!(stats.candidates, 0);
         assert_eq!(stats.retries, 0);
-        if remaining < 4 {
-            // The full ROI would not fit: preserve scalar partial failure,
-            // even though the first two pixels already contain both extrema.
+        let range_reads = if fast || (OPT && remaining >= 4) {
+            2
+        } else {
+            4
+        };
+        if remaining < range_reads {
             assert_eq!(state.range, None);
             assert_eq!(stats.rows, 0);
             assert_eq!(stats.passes, 0);
         } else {
             assert_eq!(state.range, Some([0, 255]));
-            // Optimized range discovery saves two reads, finishes the first
-            // two-pixel scan row, then stops during the inverted pass. Legacy
-            // range discovery spends all four reads and stops in the first pass.
-            let passes = if OPT { 2 } else { 1 };
+            // Each global pass scans one two-pixel row before the next begins.
+            let passes = 1 + (remaining - range_reads) / 2;
             assert_eq!(stats.rows, passes);
             assert_eq!(stats.passes, passes);
         }
@@ -604,11 +605,12 @@ mod range_budget_review_tests {
     }
 
     #[test]
-    fn nonzero_prior_usage_survives_area_minus_one_exact_and_plus_one() {
+    fn nonzero_prior_usage_survives_range_and_roi_budget_boundaries() {
         for used in [1usize, 7, 4096] {
-            for remaining in [3usize, 4, 5] {
-                check::<true>(used, remaining);
-                check::<false>(used, remaining);
+            for remaining in 1..=5 {
+                check::<true>(used, remaining, true);
+                check::<true>(used, remaining, false);
+                check::<false>(used, remaining, false);
             }
         }
     }

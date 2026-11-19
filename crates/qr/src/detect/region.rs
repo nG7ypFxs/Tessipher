@@ -157,7 +157,7 @@ fn decode_inner<const W: usize, const H: usize, const OPT: bool>(
         let reads = image.width * image.height;
         if OPT && reads <= budget.limit - used {
             // No callbacks or fallible operations inside a complete ROI range scan.
-            // Keep the partial-budget path scalar to preserve failure positions.
+            // The scalar path below checks the budget before each read.
             let (range, actual_reads) = complete_range(image);
             [min, max] = range;
             budget.used.set(used + actual_reads);
@@ -167,6 +167,11 @@ fn decode_inner<const W: usize, const H: usize, const OPT: bool>(
                     let value = budget.read(image, x, y)?;
                     min = min.min(value);
                     max = max.max(value);
+                }
+                // Fast can finish a coarse scan on a budget smaller than the ROI.
+                // Once both Gray8 extrema are known, save the rest for detection.
+                if fast && min == 0 && max == 255 {
+                    break;
                 }
             }
         }

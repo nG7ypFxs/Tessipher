@@ -115,7 +115,7 @@ pub struct MicroDecoded {
     pub format_distance: u8,
     /// Clockwise quarter turns used to put the finder at the logical top-left.
     pub rotation: u8,
-    /// Whether decoding required reflection after rotation.
+    /// Whether to transpose the symbol across its main diagonal after rotation.
     pub mirrored: bool,
 }
 
@@ -159,7 +159,9 @@ pub fn decode_micro(
     for transform in 0..8 {
         match decode_oriented(Oriented { matrix, transform }, scratch, output, segments) {
             Ok(mut decoded) => {
-                decoded.rotation = transform & 3;
+                // Sampling maps logical coordinates into the input. To orient
+                // the input itself, rotate in the opposite direction first.
+                decoded.rotation = (4 - (transform & 3)) & 3;
                 decoded.mirrored = transform >= 4;
                 return Ok(decoded);
             }
@@ -444,7 +446,7 @@ fn parse_micro(
         };
         if bits.left() < count_width {
             let left = bits.left();
-            if bits.read(left)? != 0 {
+            if indicator != 0 || bits.read(left)? != 0 {
                 return Err(Error::Truncated);
             }
             break;
@@ -562,6 +564,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn m2_short_terminator_requires_zero_mode_bits() {
+        // Ten numeric digits leave one of M2-L's 40 data bits for the terminator.
+        let mut data = [0x56, 0x13, 0x84, 0xe1, 0x2e];
+        let mut output = [0; 10];
+        let mut segments = [Segment::EMPTY; 1];
+        assert_eq!(
+            parse_micro(&data, 40, MicroVersion::M2, &mut output, &mut segments),
+            Ok((10, 1))
+        );
+        assert_eq!(&output, b"7777777777");
+        // A final one starts an Alphanumeric segment whose count is missing.
+        data[4] |= 1;
+        assert_eq!(
+            parse_micro(&data, 40, MicroVersion::M2, &mut output, &mut segments),
+            Err(Error::Truncated)
+        );
     }
 
     #[test]

@@ -73,6 +73,48 @@ fn all_modes_decode_corpus_with_both_sampling_strategies_and_exact_scratch() {
 }
 
 #[test]
+fn fast_decodes_with_a_pixel_budget_smaller_than_the_frame() {
+    let symbol = pgm(IMAGES[0]);
+    let width = 640;
+    let height = 640;
+    let mut pixels = vec![255; width * height];
+    for y in 0..symbol.height() {
+        for x in 0..symbol.width() {
+            pixels[y * width + x] = symbol.pixel(x, y).unwrap();
+        }
+    }
+    let image = GrayImage::new(&pixels, width, height, width).unwrap();
+    let run = |limit| {
+        let config = DefaultConfig {
+            max_pixel_reads: limit,
+            ..Default::default()
+        };
+        let mut output = [0; 32];
+        let mut stats = Stats::default();
+        let result = decode_with_mode(
+            image,
+            &config,
+            DetectionMode::Fast,
+            SamplingStrategy::Center,
+            &mut vec![0; config.scratch_bytes().unwrap()],
+            &mut [0; SCRATCH_BYTES],
+            &mut output,
+            &mut [Segment::EMPTY; 8],
+            &mut stats,
+        );
+        if let Ok(found) = result {
+            assert_eq!(&output[..found.decoded.payload_len], b"TEST");
+        }
+        (result, stats.pixel_reads)
+    };
+    let (baseline, reads) = run(width * height);
+    assert!(baseline.is_ok());
+    assert!(reads < width * height);
+    assert_eq!(run(reads), (baseline, reads));
+    assert_eq!(run(reads - 1), (Err(Error::PixelBudget), reads - 1));
+}
+
+#[test]
 fn fast_local_inverted_scan_reuses_memoized_rows_within_budget() {
     let pixels: [u8; 64] = core::array::from_fn(|i| if i % 8 < 4 { 120 } else { 128 });
     let image = GrayImage::new(&pixels, 8, 8, 8).unwrap();
@@ -292,9 +334,8 @@ fn every_mode_preserves_validation_and_capacity_errors_and_exact_pixel_budgets()
                 &mut segments,
                 &mut stats,
             );
-            if mode == DetectionMode::Fast && max_pixel_reads == area + 1 {
-                // A full-ROI reservation enables exact 0/255 range completion
-                // after 21 rows; the saved reads now fit the successful scan.
+            if mode == DetectionMode::Fast && max_pixel_reads >= area - 1 {
+                // Both budgets cover the first 21 rows and Fast's successful scan.
                 let found = result.unwrap();
                 assert_eq!(&output[..found.decoded.payload_len], b"TEST");
                 assert!(stats.pixel_reads < max_pixel_reads);

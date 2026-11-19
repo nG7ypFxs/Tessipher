@@ -5,12 +5,13 @@
 # ///
 """Build and test default, matrix-only, and detector-enabled Micro QR C ABIs."""
 
-import json
 import pathlib
 import platform
 import re
 import subprocess
 import tempfile
+
+from host_ffi import build_host_ffi
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -24,28 +25,7 @@ VARIANTS = {
 
 def build(name, cargo_args):
     target = TARGET / name
-    command = [
-        "cargo",
-        "build",
-        "-p",
-        "tessipher-ffi",
-        "--release",
-        "--locked",
-        "--target-dir",
-        str(target),
-        "--message-format=json",
-        *cargo_args,
-    ]
-    result = subprocess.run(command, cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True)
-    records = [json.loads(line) for line in result.stdout.splitlines()]
-    headers = [
-        pathlib.Path(record["out_dir"]) / "tessipher.h"
-        for record in records
-        if record["reason"] == "build-script-executed" and "tessipher-ffi" in record["package_id"]
-    ]
-    if len(headers) != 1:
-        raise RuntimeError(f"expected one generated tessipher-ffi header for {name}, got {headers}")
-    return target / "release" / "libqr_ffi.a", headers[0]
+    return build_host_ffi("--target-dir", str(target), *cargo_args)
 
 
 def normalized_header(path):

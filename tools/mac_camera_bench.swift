@@ -864,23 +864,21 @@ private struct PGMImage {
 private func readPGM(_ path: String) throws -> PGMImage {
     let bytes = Array(try Data(contentsOf: URL(fileURLWithPath: path)))
     var index = 0
+    func whitespace(_ byte: UInt8) -> Bool {
+        (9...13).contains(byte) || byte == 32
+    }
     func token() throws -> String {
         while index < bytes.count {
             if bytes[index] == 35 { // '#'
                 while index < bytes.count, bytes[index] != 10 { index += 1 }
-            } else if bytes[index] == 9 || bytes[index] == 10 || bytes[index] == 13 || bytes[index] == 32 {
+            } else if whitespace(bytes[index]) {
                 index += 1
             } else {
                 break
             }
         }
         let start = index
-        while index < bytes.count,
-              bytes[index] != 9,
-              bytes[index] != 10,
-              bytes[index] != 13,
-              bytes[index] != 32,
-              bytes[index] != 35 {
+        while index < bytes.count, !whitespace(bytes[index]), bytes[index] != 35 {
             index += 1
         }
         guard start < index else { throw BenchError.fixture("malformed PGM token in \(path)") }
@@ -891,12 +889,20 @@ private func readPGM(_ path: String) throws -> PGMImage {
           width > 0, height > 0, maxValue == 255 else {
         throw BenchError.fixture("\(path) has unsupported PGM dimensions or max value")
     }
-    while index < bytes.count, bytes[index] == 9 || bytes[index] == 10 || bytes[index] == 13 || bytes[index] == 32 {
-        index += 1
-        break
+    guard index < bytes.count, whitespace(bytes[index]) else {
+        throw BenchError.fixture("\(path) is missing its raster separator")
     }
-    let expected = width * height
-    guard bytes.count - index >= expected else { throw BenchError.fixture("\(path) is truncated") }
+    let separator = bytes[index]
+    index += 1
+    let (expected, overflow) = width.multipliedReportingOverflow(by: height)
+    guard !overflow else { throw BenchError.fixture("\(path) has oversized PGM dimensions") }
+    // A lone CR may be followed by an LF-valued first pixel.
+    if separator == 13, index < bytes.count, bytes[index] == 10, bytes.count - index - 1 == expected {
+        index += 1
+    }
+    guard bytes.count - index == expected else {
+        throw BenchError.fixture("\(path) has an incorrect raster length")
+    }
     let stride = width + 16
     var pixels = [UInt8](repeating: 255, count: stride * height)
     for row in 0..<height {
@@ -921,7 +927,7 @@ private func runFixture(_ options: Options) throws {
     let runner = try MeasurementRunner(options: options)
     runner.begin()
     image.pixels.withUnsafeBufferPointer { pixels in
-        for _ in 0..<options.maxFrames where runner.active {
+        while runner.active {
             runner.processFrame(
                 pixels: pixels.baseAddress!,
                 pixelsLength: image.pixels.count,
@@ -931,7 +937,6 @@ private func runFixture(_ options: Options) throws {
                 pixelFormat: "PGM-gray8")
         }
     }
-    runner.stop(reason: "fixture_complete")
     guard let report = runner.finalJSON else { throw BenchError.fixture("fixture produced no report") }
     try writeReport(report, outputPath: options.outputPath)
 }

@@ -10,12 +10,15 @@ path for harness tests.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import platform
 import shutil
 import subprocess
 import sys
+
+from host_ffi import build_host_ffi, rust_host
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -41,11 +44,19 @@ def build_app(swiftc: str, skip_cargo: bool) -> tuple[pathlib.Path, dict[str, st
     if platform.system() != "Darwin":
         raise RuntimeError("the AVFoundation camera benchmark requires macOS")
     target = target_dir()
-    if not skip_cargo:
-        run(["cargo", "build", "-p", "tessipher-ffi", "--release", "--locked"])
-    archive = target / "release" / "libqr_ffi.a"
-    if not archive.is_file():
-        raise RuntimeError(f"missing private FFI archive: {archive}")
+    if skip_cargo:
+        metadata = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT, text=True
+        ))
+        cargo_target = pathlib.Path(metadata["target_directory"])
+        archive = cargo_target / rust_host() / "release" / "libqr_ffi.a"
+        if not archive.is_file():
+            # Support archives built manually with Cargo's implicit host target.
+            archive = cargo_target / "release" / "libqr_ffi.a"
+        if not archive.is_file():
+            raise RuntimeError("missing native FFI archive; run without --skip-cargo to build it")
+    else:
+        archive = build_host_ffi().archive
 
     app = target / "mac-camera-bench" / "TessipherCameraBench.app"
     contents = app / "Contents"

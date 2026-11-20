@@ -25,16 +25,15 @@ fn transform(bits: &[u8], side: usize, transform: u8) -> Vec<u8> {
     let n = side - 1;
     for y in 0..side {
         for x in 0..side {
-            let (sx, sy) = match transform {
-                0 => (x, y),
-                1 => (n - y, x),
-                2 => (n - x, n - y),
-                3 => (y, n - x),
-                4 => (y, x),
-                5 => (n - x, y),
-                6 => (n - y, n - x),
-                _ => (x, n - y),
-            };
+            // Map the input coordinate to the upright fixture by rotating
+            // clockwise and then applying the optional diagonal reflection.
+            let (mut sx, mut sy) = (x, y);
+            for _ in 0..(transform & 3) {
+                (sx, sy) = (n - sy, sx);
+            }
+            if transform >= 4 {
+                (sx, sy) = (sy, sx);
+            }
             if matrix.get(sx, sy) == Some(true) {
                 let i = y * side + x;
                 result[i / 8] |= 0x80 >> (i % 8);
@@ -76,6 +75,8 @@ fn independent_all_versions_ecc_modes_masks_and_orientations() {
                 ecc
             );
             assert_eq!(decoded.mask, mask);
+            assert_eq!(decoded.rotation, orientation & 3);
+            assert_eq!(decoded.mirrored, orientation >= 4);
             assert_eq!(output, expected);
         }
         count += 1;

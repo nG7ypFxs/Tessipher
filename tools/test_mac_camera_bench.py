@@ -18,16 +18,17 @@ def run_fixture(
     executable: pathlib.Path,
     expected: str,
     output: pathlib.Path,
-    duration: str = "1",
+    duration: str = "60",
     width: int = 640,
     height: int = 480,
+    fixture: pathlib.Path = ROOT / "fixtures" / "v1.pgm",
 ) -> dict:
     command = [
         str(executable),
         "--fixture",
-        "fixtures/v1.pgm",
+        str(fixture),
         "--max-frames",
-        "8",
+        "2",
         "--warmup-frames",
         "2",
         "--duration-seconds",
@@ -50,7 +51,7 @@ def main() -> int:
         print("macOS-only benchmark test skipped on this host")
         return 0
     build = subprocess.run(
-        [sys.executable, str(LAUNCHER), "--skip-cargo", "--build-only"],
+        [sys.executable, str(LAUNCHER), "--build-only"],
         cwd=ROOT,
         check=True,
         stdout=subprocess.PIPE,
@@ -74,15 +75,24 @@ def main() -> int:
             width=100,
             height=100,
         )
+        # A stray LF from the header changes this flat field into a high-contrast image.
+        flat = directory_path / "flat.pgm"
+        for separator, pixel in ((b"\r\n", 255), (b"\r", 10)):
+            flat.write_bytes(b"P5\n32 32\n255" + separator + bytes([pixel]) * 1024)
+            report = run_fixture(executable, "", directory_path / "flat.json", fixture=flat)
+            for decoder in report["decoder"]:
+                assert decoder["stats"]["passes"]["max"] == 0
+                assert decoder["stats"]["pixel_reads"]["min"] == 1024
 
     for report in (success, failure):
-        assert report["sample_count"] == 6
+        assert report["completion_reason"] == "frame_cap"
+        assert report["sample_count"] == 2
         assert report["warmup_frames_decoded"] == 2
-        assert report["capture"]["delivered_frames"] == 6
+        assert report["capture"]["delivered_frames"] == 2
         assert report["capture"]["warmup_delivered_frames"] == 2
-        assert report["capture"]["delivered_frames_total"] == 8
+        assert report["capture"]["delivered_frames_total"] == 4
         assert report["capture"]["dropped_frames"] == 0
-        assert report["capture"]["interarrival_us"]["count"] == 5
+        assert report["capture"]["interarrival_us"]["count"] == 1
         assert report["input"]["stride_bytes"] > report["input"]["width"]
         assert report["input"]["source_width"] == 145
         assert report["input"]["source_height"] == 145
@@ -93,19 +103,19 @@ def main() -> int:
         assert report["input"]["preparation_us"]["count"] == report["sample_count"]
         assert "TEST" not in json.dumps(report)
         for decoder in report["decoder"]:
-            assert decoder["sample_count"] == 6
+            assert decoder["sample_count"] == 2
             assert set(("p50", "p95", "p99", "max")) <= set(decoder["latency_us"])
             for metric in ("pixel_reads", "candidates", "retries", "passes"):
                 assert set(("p50", "p95", "p99", "max")) <= set(decoder["stats"][metric])
 
     for decoder in success["decoder"]:
         assert decoder["decoder_success_fraction"] == 1
-        assert decoder["expected_payload_matches"] == 6
+        assert decoder["expected_payload_matches"] == 2
         assert decoder["expected_payload_mismatches"] == 0
     for decoder in failure["decoder"]:
         assert decoder["decoder_success_fraction"] == 1
         assert decoder["expected_payload_matches"] == 0
-        assert decoder["expected_payload_mismatches"] == 6
+        assert decoder["expected_payload_mismatches"] == 2
     # The measured duration begins after warmup. Even when it is shorter than
     # warmup processing, at least the first post-warmup frame is timed.
     assert short_duration["warmup_frames_decoded"] == 2

@@ -225,7 +225,7 @@ typedef struct qr_micro_result {
     uint32_t format_distance;
     /* Clockwise quarter turns used to orient the symbol (0..=3). */
     uint32_t rotation;
-    /* One when core decoding required reflection after rotation. */
+    /* One when the symbol must be transposed across its main diagonal after rotation. */
     uint32_t mirrored;
     /* One for an inverted-polarity detection; zero for matrix decoding. */
     uint32_t inverted;

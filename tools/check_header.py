@@ -6,41 +6,27 @@
 """Build the C library and compare/copy its formatted schema-generated header."""
 
 import argparse
-import json
-import pathlib
 import subprocess
 import sys
 
+from host_ffi import build_host_ffi
 from c_format import ROOT, find_formatter, format_bytes
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="update the bundled header")
+    parser.add_argument("--print-archive", action="store_true", help="print the verified native archive path")
     args = parser.parse_args()
     executable = find_formatter()
-    build = subprocess.run(
-        ["cargo", "build", "-p", "tessipher-ffi", "--release", "--locked", "--message-format=json"],
-        cwd=ROOT,
-        stdout=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    records = [json.loads(line) for line in build.stdout.splitlines()]
-    paths = [
-        pathlib.Path(record["out_dir"]) / "tessipher.h"
-        for record in records
-        if record["reason"] == "build-script-executed" and "tessipher-ffi" in record["package_id"]
-    ]
-    if len(paths) != 1:
-        raise RuntimeError(f"Expected one tessipher-ffi generated header, found {paths}")
+    build = build_host_ffi()
     bundled = ROOT / "include/tessipher.h"
-    generated = format_bytes(executable, paths[0].read_bytes(), bundled)
+    generated = format_bytes(executable, build.header.read_bytes(), bundled)
     if args.write:
         bundled.write_bytes(generated)
     if bundled.read_bytes() != generated:
         raise RuntimeError("Bundled C header differs; run `uv run tools/check_header.py --write`")
-    print("Formatted generated and bundled C headers match")
+    print(build.archive if args.print_archive else "Formatted generated and bundled C headers match")
 
 
 if __name__ == "__main__":

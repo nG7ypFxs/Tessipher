@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 import decoder_bench as bench
+import host_ffi
 
 EXECUTABLE: Path | None = None
 MEMORY_EXECUTABLE: Path | None = None
@@ -135,12 +136,22 @@ class AccountingTests(unittest.TestCase):
             for path in (stale, archive):
                 path.parent.mkdir(parents=True)
                 path.touch()
-            result = json.dumps({"reason": "compiler-artifact", "target": {"name": "qr_ffi"},
-                                 "filenames": [str(archive.with_suffix(".rlib")), str(archive)]})
+            header = target / "generated" / "tessipher.h"
+            header.parent.mkdir()
+            header.touch()
+            records = [
+                {"reason": "build-script-executed", "package_id": "ffi", "out_dir": str(header.parent)},
+                {"reason": "build-script-executed", "package_id": "other", "out_dir": str(target)},
+                {"reason": "compiler-artifact", "package_id": "ffi", "target": {"name": "qr_ffi"},
+                 "filenames": [str(archive.with_suffix(".rlib")), str(archive)]},
+            ]
+            messages = "\n".join(map(json.dumps, records))
             with mock.patch.dict(bench.os.environ, CARGO_TARGET_DIR=directory, CARGO_BUILD_TARGET="thumbv6m-none-eabi"), \
-                 mock.patch.object(bench, "command_output", side_effect=["host: aarch64-apple-darwin", result]) as run:
-                self.assertEqual(bench.build_host_archive(), archive)
+                 mock.patch.object(host_ffi.subprocess, "check_output",
+                                   side_effect=["host: aarch64-apple-darwin", messages]) as run:
+                self.assertEqual(host_ffi.build_host_ffi("--features", "micro-qr"), (archive, header))
                 command = run.call_args.args[0]
+                self.assertEqual(command[command.index("--features") + 1], "micro-qr")
                 self.assertEqual(command[command.index("--target") + 1], "aarch64-apple-darwin")
 
     def test_cached_source_override_verified_without_source_argument(self):
@@ -150,9 +161,10 @@ class AccountingTests(unittest.TestCase):
             build_dir.mkdir()
             (build_dir / "decoder-sources.txt").write_text("/cached/quirc\n/cached/zxing\n")
             args = argparse.Namespace(cmake="cmake", jobs=1, source_dir=None)
+            ffi = host_ffi.HostFfi(target / "libqr_ffi.a", target / "tessipher.h")
             for responses in (["wrong-commit"], [bench.DEPENDENCIES["quirc"]["commit"], " M lib/decode.c"]):
                 with self.subTest(responses=responses), mock.patch.object(bench, "target_dir", return_value=target), \
-                     mock.patch.object(bench, "build_host_archive", return_value=target / "libqr_ffi.a"), \
+                     mock.patch.object(bench, "build_host_ffi", return_value=ffi), \
                      mock.patch.object(bench.subprocess, "run") as run, \
                      mock.patch.object(bench, "command_output", side_effect=responses), \
                      self.assertRaises(ValueError):

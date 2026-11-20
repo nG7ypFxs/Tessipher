@@ -11,6 +11,8 @@ import re
 import subprocess
 import tempfile
 
+from host_ffi import rust_host
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VARIANTS = {
@@ -23,7 +25,7 @@ VARIANTS = {
 def export(directory, cargo_args):
     subprocess.run(
         ["uv", "run", str(ROOT / "tools/export_ffi.py"),
-         "--output-dir", directory.name, *cargo_args],
+         "--output-dir", directory.name, "--target", rust_host(), *cargo_args],
         cwd=directory.parent,
         check=True,
     )

@@ -214,7 +214,7 @@ abi_struct! {
     format_distance: u32,
     /// Clockwise quarter turns used to orient the symbol (0..=3).
     rotation: u32,
-    /// One when core decoding required reflection after rotation.
+    /// One when the symbol must be transposed across its main diagonal after rotation.
     mirrored: u32,
     /// One for an inverted-polarity detection; zero for matrix decoding.
     inverted: u32,

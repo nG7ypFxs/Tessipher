@@ -33,7 +33,7 @@ Measure your workload on the target hardware when choosing modes and buffers.
 To use a published crates.io release, run in your project:
 
 ```sh
-cargo add tessipher
+cargo add tessipher@0.2.0
 ```
 
 To try decoding from the repository root:
